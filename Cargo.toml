@@ -1,0 +1,17 @@
+[package]
+name = "koti"
+version = "0.1.0"
+authors = ["not_a_seagull <notaseagull048@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+dirs = "3"
+env_logger = { version = "0.8", default-features = false }
+event-listener = "2.5"
+futures-lite = "1"
+log = "0.4"
+nanorand = "0.5.2"
+image = "0.23.14"
+once_cell = { version = "1.7", features = ["parking_lot"] }
+thirtyfour = { version = "0.23.0", features = ["tokio-runtime"] }
+tokio = { version = "1.5", features = ["rt", "rt-multi-thread", "fs", "net", "io-util", "parking_lot", "process", "sync"] }
