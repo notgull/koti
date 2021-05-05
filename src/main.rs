@@ -30,64 +30,79 @@ pub use frame::*;
 use context::Context;
 use futures_lite::stream::{self, Stream, StreamExt};
 use nanorand::{tls_rng, RNG};
-use std::{future::Future, path::Path, pin::Pin};
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+};
 
 const THREAD_COUNT: usize = 4;
 
-const FRAME_SOURCES: &[fn(
-    &'static Context,
-) -> Pin<Box<dyn Future<Output = crate::Result> + Send + 'static>>] = &[|cx| {
-    Box::pin(async move {
-        process::process(
-            reddit_text_source::reddit_text_source("AskReddit", 10000, 1000, 100, "day", cx)
-                .await?,
-        )
-        .await
-    })
-}];
+macro_rules! reddit_text_source {
+    ($sub: expr, $ut: expr, $ct: expr, $rt: expr, $net: expr) => {{
+        |cx| {
+            Box::pin(async move {
+                process::process(
+                    reddit_text_source::reddit_text_source($sub, $ut, $ct, $rt, $net, &cx).await?,
+                )
+                .await
+            })
+        }
+    }};
+}
 
-static CONTEXT: Context = Context::new();
+const FRAME_SOURCES: &[fn(
+    Arc<Context>,
+) -> Pin<Box<dyn Future<Output = crate::Result> + Send + 'static>>] =
+    &[reddit_text_source!("AskReddit", 10000, 1000, 100, "day")];
 
 #[inline]
-async fn entry(homedir: &Path) -> crate::Result {
+async fn entry(homedir: PathBuf) -> crate::Result {
     // create the context
-    let ctx = context::Context::default();
+    let ctx = Arc::new(context::Context::default());
 
     // create a base dir to use
-    let basedirname: String = tls_rng().generate::<usize>().to_string();
-    let basedir = homedir.join(basedirname);
+    let basedirname = tls_rng().generate::<usize>();
+    let basedir = homedir.join(format!("koti{}", basedirname));
+    log::info!("Setting up shop at {:?}", &basedir);
 
     // create the directory
-    tokio::fs::create_dir_all(&basedir).await;
+    tokio::fs::create_dir_all(&basedir).await?;
 
-    CONTEXT.set_basedir(basedir).await;
+    ctx.set_basedir(basedir).await;
 
     // create a guard that deletes the base directory on exit
-    struct DeleteTheBasedirOnExit;
+    struct DeleteTheBasedirOnExit(Arc<Context>);
 
     impl Drop for DeleteTheBasedirOnExit {
         #[inline]
         fn drop(&mut self) {
-            tokio::runtime::Handle::current()
-                .spawn(async { tokio::fs::remove_dir_all(&CONTEXT.basedir().await).await });
+            let ctx = self.0.clone();
+            tokio::spawn(async move { tokio::fs::remove_dir_all(ctx.basedir().await).await });
         }
     }
 
-    let _guard = DeleteTheBasedirOnExit;
+    let _guard = DeleteTheBasedirOnExit(ctx.clone());
 
     // select a random element from the array
-    let frame_source = FRAME_SOURCES[tls_rng().generate_range::<usize>(0, FRAME_SOURCES.len() - 1)];
+    let frame_source = FRAME_SOURCES[tls_rng().generate_range::<usize>(0, FRAME_SOURCES.len())];
 
     // spawn two tasks: one for creating the thumbnail and one for creating the video proper
-    let t1 = tokio::spawn(async move { frame_source(&CONTEXT).await });
-    let t2 = tokio::spawn(thumbnail::create_thumbnail(&CONTEXT));
+    let ctx_clone = ctx.clone();
+    let ctx_clone2 = ctx.clone();
+    let t1 = tokio::spawn(async move { frame_source(ctx_clone).await });
+    let t2 = tokio::spawn(async move {
+        let ctx = ctx_clone2;
+        thumbnail::create_thumbnail(&ctx).await
+    });
 
     let (t1, t2) = futures_lite::future::zip(t1, t2).await;
     t1??;
     t2??;
 
     // now that we have a video and a thumbnail, upload to YouTube
-    youtube::upload_to_youtube(&CONTEXT).await
+    youtube::upload_to_youtube(&ctx).await
 }
 
 fn main() {
@@ -104,7 +119,7 @@ fn main() {
         .expect("Unable to construct Tokio runtime")
         .block_on(async move {
             loop {
-                match tokio::spawn(entry(&path)).await {
+                match tokio::spawn(entry(path)).await {
                     Ok(Ok(())) => break,
                     Err(e) => {
                         log::error!("Tokio error: {:?}", e);
@@ -112,7 +127,6 @@ fn main() {
                     }
                     Ok(Err(e)) => {
                         log::error!("A fatal error occurred: {:?}", e);
-                        CONTEXT.reset().await;
                         break;
                     }
                 }

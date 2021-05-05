@@ -23,7 +23,7 @@ use tokio::task::JoinError;
 #[derive(Debug)]
 pub enum Error {
     Msg(String),
-    StaticMsg(String),
+    StaticMsg(&'static str),
     Io(IoError),
     Selenium(WebDriverError),
     Image(ImageError),

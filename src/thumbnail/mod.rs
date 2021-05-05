@@ -18,7 +18,7 @@
 use crate::context::Context;
 
 pub async fn create_thumbnail(ctx: &Context) -> crate::Result {
-    ctx.wait_for_thumbnail();
+    ctx.wait_for_thumbnail().await;
 
     Ok(())
 }

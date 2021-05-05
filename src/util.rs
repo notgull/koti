@@ -15,14 +15,17 @@
  * along with KOTI.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::{fs::File as SyncFile, mem, path::Path, pin::Pin, sync::Arc};
+use std::{
+    fs::File,
+    io::{prelude::*, BufReader, BufWriter},
+    mem,
+    path::Path,
+    pin::Pin,
+    sync::Arc,
+};
 use thirtyfour::{
     common::types::{ElementId, ElementRect},
     prelude::*,
-};
-use tokio::{
-    fs::File,
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
 };
 
 #[inline]
@@ -34,22 +37,25 @@ pub async fn cropped_screenshot(
     height: u32,
     path: &Path,
 ) -> crate::Result {
+    log::info!("Screenshotting webdriver");
     driver.screenshot(path).await?;
 
-    // open up the image file
-    let mut v = vec![];
-    let mut f = File::open(path).await?;
-    f.read_buf(&mut v).await?;
-    let mut img = image::load_from_memory(&v)?;
+    let truepath = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        // open up the image file
+        log::info!("Reading image from file");
+        let mut img = image::open(&truepath)?;
 
-    // crop the image
-    let cropped_img = image::imageops::crop(&mut img, x, y, width, height);
+        // crop the image
+        log::info!("Cropping image");
+        let cropped_img = image::imageops::crop(&mut img, x, y, width, height).to_image();
 
-    // save the image
-    v.clear();
-    img.write_to(&mut v, image::ImageOutputFormat::Png)?;
-    let mut f = File::create(path).await?;
-    f.write_all(&v).await?;
+        // save the image
+        log::info!("Writing image to file");
+        cropped_img.save(truepath)?;
+        Result::<(), crate::Error>::Ok(())
+    })
+    .await??;
     Ok(())
 }
 
@@ -73,9 +79,14 @@ pub async fn screenshot_item<'a>(
         width.ceil() as u32,
         height.ceil() as u32,
     );
-    cropped_screenshot(driver, x, y, width, height, path).await
+    log::info!("Element coordinates are ({}, {})", x, y);
+    // y is zero because scrolling into view should take care of that
+    cropped_screenshot(driver, x, 0, width, height, path).await
+    //element.screenshot(path).await?;
+    //Ok(())
 }
 
+#[derive(Clone)]
 pub struct ArcWebElement {
     pub element_id: ElementId,
     pub driver: Arc<WebDriver>,
