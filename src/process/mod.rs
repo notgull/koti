@@ -28,5 +28,6 @@ pub async fn process<S: Stream<Item = Frame>>(frames: S) -> crate::Result {
         })
         .collect()
         .await;
+    log::info!("{:?}", frames);
     Ok(())
 }

@@ -50,8 +50,7 @@ macro_rules! reddit_text_source {
                 net: &str,
                 cx: Arc<Context>,
             ) -> crate::Result {
-                let f = reddit_text_source::reddit_text_source(sub, ut, ct, rt, net, &cx)
-                    .await?;
+                let f = reddit_text_source::reddit_text_source(sub, ut, ct, rt, net, &cx).await?;
                 println!("Created reddit text stream source");
 
                 process::process(f).await

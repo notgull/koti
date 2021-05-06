@@ -604,7 +604,6 @@ pub async fn reddit_text_source(
     // within the post, there will be paragraphs, turn each of these into a frame
     let basedir: Arc<Path> = basedir.into_boxed_path().into();
     let parframes = item.paragraph_frames(basedir.clone()).await?;
-    let parframes: Vec<Frame> = parframes.collect().await;
 
     // add a frame for the comments
     let comments_frame = Frame {
@@ -617,67 +616,54 @@ pub async fn reddit_text_source(
 
     // iterate through the comments and see which ones we want to use
     // note: stream didn't work, doing this now
-    /*let comment_frames = stream::iter(item.comment_elements().await?.into_iter())
-    .enumerate()
-    .then(move |(index, elem)| {
-        log::info!("Beginning processing of top-level comment #{}", index);
-        timeout(
-            report_on_comment(elem, basedir.clone(), comment_threshold, reply_threshold),
-            60,
-        )
-    })
-    .filter_map(|r| {
-        log::info!("report_on_comment() finished!");
-        match r {
-            Ok(Ok(Some(t))) => {
-                log::info!("Finished frame source");
-                Some(t)
+    let comment_frames = stream::iter(item.comment_elements().await?.into_iter())
+        .enumerate()
+        .then(move |(index, elem)| {
+            log::info!("Beginning processing of top-level comment #{}", index);
+            timeout(
+                report_on_comment(elem, basedir.clone(), comment_threshold, reply_threshold),
+                60,
+            )
+        })
+        .filter_map(|r| {
+            log::info!("report_on_comment() finished!");
+            match r {
+                Ok(Ok(Some(t))) => {
+                    log::info!("Finished frame source");
+                    Some(t)
+                }
+                Ok(Ok(None)) => {
+                    log::info!("report_on_comment() returned None");
+                    None
+                }
+                Ok(Err(e)) | Err(e) => {
+                    log::error!("report_on_comment() error'd: {}", e);
+                    None
+                }
             }
-            Ok(Ok(None)) => {
-                log::info!("report_on_comment() returned None");
-                None
-            }
-            Ok(Err(e)) | Err(e) => {
-                log::error!("report_on_comment() error'd: {}", e);
-                None
-            }
-        }
-    })
-    .flatten()
-    .map(|f| Some(f))
-    .chain(stream::once(None))
-    .filter_map(|f| match f {
-        Some(f) => Some(f),
-        None => {
-            println!("Done processing comments!");
-            None
-        }
-    });*/
-    let mut comment_frames: Vec<Frame> = vec![];
-    for elem in item.comment_elements().await? {
-        let fs = timeout(
-            report_on_comment(elem, basedir.clone(), comment_threshold, reply_threshold),
-            60,
-        )
-        .await??;
-        if let Some(fs) = fs {
-            fs.for_each(|cf| comment_frames.push(cf)).await;
-        }
-    }
+        })
+        .flatten();
 
     log::info!("Constructing final stream...");
 
     // we should have all the frames we need, put them together
+    let driver_clone = driver.clone();
     let frames = stream::once(titleframe)
         .chain(parframes)
         .chain(stream::once(comments_frame))
-        .chain(comment_frames);
+        .chain(comment_frames)
+        .map(Option::Some)
+        .chain(stream::once(()).map(move |_| {
+            let dc = driver_clone.clone();
+            tokio::spawn(async move { dc.close().await });
+            None
+        }))
+        .filter_map(std::convert::identity);
 
     log::info!("Stream constructed...");
 
     // yeah i know this is a cardinal sin but the program hangs if I don't do this
     mem::forget(driver.clone());
-    driver.close().await?;
 
     Ok(frames)
 }
