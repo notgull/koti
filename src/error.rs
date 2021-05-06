@@ -29,6 +29,8 @@ pub enum Error {
     Image(ImageError),
     Join(JoinError),
     NumParseError,
+    ScoreTimedOut,
+    Timeout,
 }
 
 impl fmt::Display for Error {
@@ -42,6 +44,8 @@ impl fmt::Display for Error {
             Self::Image(i) => fmt::Display::fmt(i, f),
             Self::Join(j) => fmt::Display::fmt(j, f),
             Self::NumParseError => f.write_str("Could not parse number"),
+            Self::ScoreTimedOut => f.write_str("Score timed out"),
+            Self::Timeout => f.write_str("Operation timed out"),
         }
     }
 }

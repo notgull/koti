@@ -1,5 +1,6 @@
 // GNU AGPL v3
 
+use once_cell::sync::Lazy;
 use quick_xml::{
     events::{BytesEnd, BytesStart, Event},
     Reader,
@@ -7,7 +8,9 @@ use quick_xml::{
 use std::borrow::Cow;
 
 /// Given the outer HTML of a comment thing element, get a list of ID's corresponding to its children.
-pub fn direct_children(html: String) -> impl Iterator<Item = String> + Send {
+pub fn direct_children(mut html: String) -> impl Iterator<Item = String> + Send {
+    fix_broken(&mut html);
+
     genawaiter::sync::Gen::new(move |co| async move {
         let mut reader = Reader::from_reader(html.as_bytes());
         let mut state = StateMachine::default();
@@ -148,4 +151,47 @@ fn subsequence(container: &[u8], test: &[u8]) -> bool {
         .windows(test.len())
         .find(|window| *window == test)
         .is_some()
+}
+
+/// Fix broken tags
+#[inline]
+fn fix_broken(input: &mut String) {
+    let ibytes = input.as_bytes();
+    let mut inserts = ibytes
+        .windows(6)
+        .enumerate()
+        .filter_map(|(index1, window)| {
+            if &window[..4] == b"<img" || window == b"<input" {
+                (&ibytes[index1 + 4..])
+                    .windows(2)
+                    .enumerate()
+                    .find_map(|(index2, c)| {
+                        if c[0] == b'>' && c != b"/>" {
+                            Some(index1 + index2 + 5)
+                        } else {
+                            None
+                        }
+                    })
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<usize>>();
+    let mut offset = 0;
+
+    inserts.into_iter().for_each(|insert| {
+        input.insert(insert + offset - 1, '/');
+        offset += 1;
+    });
+}
+
+#[test]
+fn test_fix_broken() {
+    const INPUT: &str = "<a><b><c><img src=\"https://goobar\"></c></b></a>";
+    let mut input = INPUT.to_string();
+    fix_broken(&mut input);
+    assert_eq!(
+        &*input,
+        "<a><b><c><img src=\"https://goobar\"/></c></b></a>"
+    );
 }

@@ -22,7 +22,11 @@ use tokio::process::Command;
 pub async fn process<S: Stream<Item = Frame>>(frames: S) -> crate::Result {
     let mut melt_command = Command::new("melt");
     log::info!("Collecting frames...");
-    let frames: Vec<Frame> = frames.collect().await;
-    println!("{:?}", frames);
+    let frames: Vec<Frame> = frames
+        .inspect(|f| {
+            log::info!("New frame: {:?}", f);
+        })
+        .collect()
+        .await;
     Ok(())
 }

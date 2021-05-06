@@ -42,13 +42,22 @@ const THREAD_COUNT: usize = 4;
 macro_rules! reddit_text_source {
     ($sub: expr, $ut: expr, $ct: expr, $rt: expr, $net: expr) => {{
         |cx| {
-            Box::pin(async move {
-                let f =
-                    reddit_text_source::reddit_text_source($sub, $ut, $ct, $rt, $net, &cx).await?;
-                log::info!("Created reddit text stream source");
+            async fn inner(
+                sub: &str,
+                ut: i64,
+                ct: i64,
+                rt: i64,
+                net: &str,
+                cx: Arc<Context>,
+            ) -> crate::Result {
+                let f = reddit_text_source::reddit_text_source(sub, ut, ct, rt, net, &cx)
+                    .await?;
+                println!("Created reddit text stream source");
 
                 process::process(f).await
-            })
+            }
+
+            Box::pin(inner($sub, $ut, $ct, $rt, $net, cx))
         }
     }};
 }
@@ -91,7 +100,7 @@ async fn entry(homedir: PathBuf) -> crate::Result {
 
     // spawn two tasks: one for creating the thumbnail and one for creating the video proper
     let ctx_clone = ctx.clone();
-    let ctx_clone2 = ctx.clone();
+    /*let ctx_clone2 = ctx.clone();
     let t1 = tokio::spawn(async move { frame_source(ctx_clone).await });
     let t2 = tokio::spawn(async move {
         let ctx = ctx_clone2;
@@ -100,9 +109,10 @@ async fn entry(homedir: PathBuf) -> crate::Result {
 
     let (t1, t2) = futures_lite::future::zip(t1, t2).await;
     t1??;
-    t2??;
+    t2??;*/
+    frame_source(ctx_clone).await?;
 
-    // now that we have a video and a thumbnail, upload to YouTube
+    // now that we have a video and a thumbnail, upload to YouTube*/
     youtube::upload_to_youtube(&ctx).await
 }
 

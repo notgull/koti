@@ -18,9 +18,12 @@
 use crate::{
     context::Context,
     frame::Frame,
-    util::{self, ArcWebElement},
+    util::{self, timeout, ArcWebElement},
 };
-use futures_lite::stream::{self, Stream, StreamExt};
+use futures_lite::{
+    future,
+    stream::{self, Stream, StreamExt},
+};
 use nanorand::{tls_rng, RNG};
 use once_cell::sync::OnceCell;
 use std::{
@@ -37,7 +40,7 @@ use std::{
     },
     time::Duration,
 };
-use thirtyfour::{common::types::ElementRect, prelude::*};
+use thirtyfour::{common::types::ElementRect, error::WebDriverResult, prelude::*};
 
 mod direct_children;
 use direct_children::direct_children;
@@ -90,18 +93,26 @@ impl Comment {
     }
 
     #[inline]
+    fn is_toplevel(&self) -> bool {
+        matches!(&self.status, CommentStatus::Toplevel)
+    }
+
+    #[inline]
     async fn score(&self) -> crate::Result<i64> {
-        let score = self
-            .commentbody
-            .elem()
-            .find_element(By::ClassName("score"))
-            .await?;
-        match score.get_attribute("title").await? {
+        log::info!("Trying to get comment score");
+        let score = timeout(
+            self.commentbody.elem().find_element(By::ClassName("score")),
+            10,
+        )
+        .await??;
+        let score = match score.get_attribute("title").await? {
             None => Err(crate::Error::StaticMsg(
                 "Score doesn't exist, likely a blunder",
             )),
             Some(score) => i64::from_str(&score).map_err(|_| crate::Error::NumParseError),
-        }
+        }?;
+        log::info!("Got the score!");
+        Ok(score)
     }
 
     #[inline]
@@ -128,7 +139,12 @@ impl Comment {
                         y: ytop,
                         width: widthtop,
                         height: heighttop,
-                    } => (x, y, cmp::max(width, widthtop), height + heighttop + 5),
+                    } => (
+                        xtop,
+                        ytop,
+                        cmp::max(width, widthtop),
+                        height + heighttop + 15,
+                    ),
                 };
                 res.1 = 0;
                 self.screenshot_rect.set(res).ok();
@@ -145,12 +161,16 @@ impl Comment {
             GLOBAL_NUMBER.fetch_add(1, Ordering::Relaxed)
         ));
         let (x, y, width, height) = self.screenshot_rect().await?;
+        if self.is_toplevel() {
+            self.scroll().await?;
+        }
         util::cropped_screenshot(self.elem.as_owner(), x, y, width, height, &path).await?;
         Ok(path)
     }
 
     #[inline]
     async fn text(&self) -> crate::Result<String> {
+        log::info!("Getting comment text");
         Ok(stream::iter(
             self.commentbody
                 .elem()
@@ -160,7 +180,7 @@ impl Comment {
                 .skip(1usize),
         )
         .then(|e| async move { e.text().await })
-        .filter_map(Result::ok)
+        .filter_map(util::ok_log)
         .collect::<String>()
         .await)
     }
@@ -175,6 +195,7 @@ impl Comment {
     async fn frame(&self) -> crate::Result<Frame> {
         let sspath = self.screenshot().await?;
         let text = self.text().await?;
+        log::info!("Got comment text");
         Ok(Frame {
             tts: text,
             overlaid: String::new(),
@@ -210,7 +231,7 @@ impl Comment {
         /*let eclone = self.elem.clone();
         let childs = stream::iter(childs)
             .then(move |child_id| eclone.clone().elem().find_element(By::Id(&child_id)))
-            .filter_map(Result::ok)
+            .filter_map(util::ok_log)
             .map(move |elem| {
                 (
                     ArcWebElement::new(driver_clone.clone(), elem.element_id),
@@ -242,19 +263,24 @@ impl Comment {
 
         Ok(stream::once(self).chain(
             stream::iter(subelems.into_iter())
-                .then(move |(elem, basedir)| {
+                .enumerate()
+                .then(move |(index, (elem, basedir))| {
                     Comment::new(
                         elem,
                         basedir,
-                        CommentStatus::LowerLevel {
-                            x,
-                            y,
-                            width,
-                            height,
+                        if index == 0 {
+                            CommentStatus::LowerLevel {
+                                x,
+                                y,
+                                width,
+                                height,
+                            }
+                        } else {
+                            CommentStatus::Toplevel
                         },
                     )
                 })
-                .filter_map(Result::ok),
+                .filter_map(util::ok_log),
         ))
     }
 
@@ -284,7 +310,7 @@ impl Comment {
                             comment.children().await
                         }
                     })
-                    .filter_map(Result::ok)
+                    .filter_map(util::ok_log)
                     .flatten(),
             );
             Ok(s as Pin<Box<dyn Stream<Item = Comment> + Send + 'static>>)
@@ -299,10 +325,13 @@ async fn report_on_comment(
     comment_threshold: i64,
     reply_threshold: i64,
 ) -> crate::Result<Option<impl Stream<Item = Frame> + Send + 'static>> {
+    log::info!("Beginning report_on_comment()");
+
     let elem = Comment::new(elem, basedir, Default::default()).await?;
     elem.scroll().await?;
 
     if elem.score().await? < comment_threshold {
+        log::info!("Skipping this comment due to its low score");
         return Ok(None);
     }
 
@@ -311,20 +340,31 @@ async fn report_on_comment(
     Ok(Some(
         elem.children()
             .await?
-            .then(|elem| async move { (elem.score().await, elem) })
-            .filter_map(move |(score, elem)| {
-                if let Ok(score) = score {
-                    if score >= reply_threshold {
-                        Some(elem)
+            .enumerate()
+            .then(|(index, elem)| async move {
+                log::info!("Beginning reply #{}", index);
+                (elem.score().await, elem)
+            })
+            .take_while(move |(score, elem)| match score {
+                Ok(score) => {
+                    if *score >= reply_threshold {
+                        true
                     } else {
-                        None
+                        log::info!("Skipping this reply due to its low score");
+                        false
                     }
-                } else {
-                    None
+                }
+                Err(e) => {
+                    log::error!("Unable to get score: {}", e);
+                    false
                 }
             })
-            .then(|elem| elem.into_frame())
-            .filter_map(Result::ok),
+            .then(|elem| async move {
+                let f = elem.1.into_frame().await;
+                log::info!("Finished reply frame!");
+                f
+            })
+            .filter_map(util::ok_log),
     ))
 }
 
@@ -563,6 +603,7 @@ pub async fn reddit_text_source(
     // within the post, there will be paragraphs, turn each of these into a frame
     let basedir: Arc<Path> = basedir.into_boxed_path().into();
     let parframes = item.paragraph_frames(basedir.clone()).await?;
+    let parframes: Vec<Frame> = parframes.collect().await;
 
     // add a frame for the comments
     let comments_frame = Frame {
@@ -574,18 +615,64 @@ pub async fn reddit_text_source(
     };
 
     // iterate through the comments and see which ones we want to use
-    let comment_frames = stream::iter(item.comment_elements().await?.into_iter())
-        .then(move |elem| {
-            report_on_comment(elem, basedir.clone(), comment_threshold, reply_threshold)
-        })
-        .filter_map(|r| if let Ok(Some(t)) = r { Some(t) } else { None })
-        .flatten();
+    // note: stream didn't work, doing this now
+    /*let comment_frames = stream::iter(item.comment_elements().await?.into_iter())
+    .enumerate()
+    .then(move |(index, elem)| {
+        log::info!("Beginning processing of top-level comment #{}", index);
+        timeout(
+            report_on_comment(elem, basedir.clone(), comment_threshold, reply_threshold),
+            60,
+        )
+    })
+    .filter_map(|r| {
+        log::info!("report_on_comment() finished!");
+        match r {
+            Ok(Ok(Some(t))) => {
+                log::info!("Finished frame source");
+                Some(t)
+            }
+            Ok(Ok(None)) => {
+                log::info!("report_on_comment() returned None");
+                None
+            }
+            Ok(Err(e)) | Err(e) => {
+                log::error!("report_on_comment() error'd: {}", e);
+                None
+            }
+        }
+    })
+    .flatten()
+    .map(|f| Some(f))
+    .chain(stream::once(None))
+    .filter_map(|f| match f {
+        Some(f) => Some(f),
+        None => {
+            println!("Done processing comments!");
+            None
+        }
+    });*/
+    let mut comment_frames: Vec<Frame> = vec![];
+    for elem in item.comment_elements().await? {
+        let fs = timeout(
+            report_on_comment(elem, basedir.clone(), comment_threshold, reply_threshold),
+            60,
+        )
+        .await??;
+        if let Some(fs) = fs {
+            fs.for_each(|cf| comment_frames.push(cf)).await;
+        }
+    }
 
     log::info!("Constructing final stream...");
 
     // we should have all the frames we need, put them together
-    Ok(stream::once(titleframe)
-        .chain(parframes)
+    let frames = stream::once(titleframe)
+        .chain(stream::iter(parframes.into_iter()))
         .chain(stream::once(comments_frame))
-        .chain(comment_frames))
+        .chain(stream::iter(comment_frames.into_iter()));
+
+    log::info!("Stream constructed...");
+
+    Ok(frames)
 }

@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 dirs = "3"
-env_logger = { version = "0.8", default-features = false }
+env_logger = { version = "0.8", default-features = false, features = ["atty", "termcolor"] }
 event-listener = "2.5"
 futures-lite = "1"
 genawaiter = { version = "0.99", default-features = false }

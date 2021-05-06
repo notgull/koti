@@ -15,7 +15,9 @@
  * along with KOTI.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+use futures_lite::future;
 use std::{
+    fmt,
     fs::File,
     future::Future,
     io::{prelude::*, BufReader, BufWriter},
@@ -24,6 +26,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::Duration,
 };
 use thirtyfour::{
     common::types::{ElementId, ElementRect},
@@ -140,4 +143,42 @@ impl<B, Fut: Future, F: FnOnce(Fut::Output) -> B> Future for MapFuture<Fut, F> {
             }
         }
     }
+}
+
+#[inline]
+pub fn ok_log<D, E: fmt::Display>(res: std::result::Result<D, E>) -> Option<D> {
+    match res {
+        Ok(d) => Some(d),
+        Err(e) => {
+            log::error!("{}", e);
+            None
+        }
+    }
+}
+
+#[inline]
+pub fn timeout<Fut: Future>(
+    fut: Fut,
+    seconds: u64,
+) -> impl Future<Output = crate::Result<Fut::Output>> {
+    future::or(
+        MapFuture::new(fut, Result::Ok),
+        MapFuture::new(tokio::time::sleep(Duration::from_secs(seconds)), |()| {
+            Err(crate::Error::Timeout)
+        }),
+    )
+}
+
+#[test]
+fn test_timeout() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Unable to construct Tokio runtime")
+        .block_on(async move {
+            assert_eq!(timeout(future::ready(1u8), 5).await.unwrap(), 1u8);
+            assert!(timeout(tokio::time::sleep(Duration::from_secs(11)), 10)
+                .await
+                .is_err());
+        });
 }
