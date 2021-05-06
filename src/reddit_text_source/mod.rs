@@ -599,6 +599,7 @@ pub async fn reddit_text_source(
 
     // tell driver to go to that index
     let item = item.into_thread().await?;
+    let driver = item.driver.clone();
 
     // within the post, there will be paragraphs, turn each of these into a frame
     let basedir: Arc<Path> = basedir.into_boxed_path().into();
@@ -668,11 +669,15 @@ pub async fn reddit_text_source(
 
     // we should have all the frames we need, put them together
     let frames = stream::once(titleframe)
-        .chain(stream::iter(parframes.into_iter()))
+        .chain(parframes)
         .chain(stream::once(comments_frame))
-        .chain(stream::iter(comment_frames.into_iter()));
+        .chain(comment_frames);
 
     log::info!("Stream constructed...");
+
+    // yeah i know this is a cardinal sin but the program hangs if I don't do this
+    mem::forget(driver.clone());
+    driver.close().await?;
 
     Ok(frames)
 }

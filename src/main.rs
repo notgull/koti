@@ -112,9 +112,18 @@ async fn entry(homedir: PathBuf) -> crate::Result {
     t2??;*/
     frame_source(ctx_clone).await?;
 
-    // now that we have a video and a thumbnail, upload to YouTube*/
+    // now that we have a video and a thumbnail, upload to YouTube
     youtube::upload_to_youtube(&ctx).await
 }
+
+/*#[inline]
+async fn entry(homedir: PathBuf) -> crate::Result {
+    let cx = Context::default();
+    reddit_text_source::reddit_text_source("AskReddit", 1000, 200, 100, "day", &cx)
+                    .await?.for_each(|f| log::info!("{:?}", f)).await;
+
+    Ok(())
+}*/
 
 fn main() {
     // sets up the logging framework
