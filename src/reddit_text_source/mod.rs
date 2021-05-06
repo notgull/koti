@@ -179,7 +179,7 @@ impl Comment {
                 .into_iter()
                 .skip(1usize),
         )
-        .then(|e| async move { e.text().await })
+        .then(|e| async move { e.inner_html().await })
         .filter_map(util::ok_log)
         .collect::<String>()
         .await)
@@ -520,7 +520,7 @@ impl RedditThread {
                     .await
                     .unwrap();
                 Frame {
-                    tts: iteme.text().await.unwrap(),
+                    tts: iteme.inner_html().await.unwrap(),
                     overlaid: String::new(),
                     imagepath: Some(parscreename),
                     imagefadesin: false,
