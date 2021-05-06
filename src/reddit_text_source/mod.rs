@@ -27,6 +27,7 @@ use std::{
     array::IntoIter as ArrayIter,
     cmp,
     future::Future,
+    mem,
     path::{Path, PathBuf},
     pin::Pin,
     str::FromStr,
@@ -37,6 +38,9 @@ use std::{
     time::Duration,
 };
 use thirtyfour::{common::types::ElementRect, prelude::*};
+
+mod direct_children;
+use direct_children::direct_children;
 
 static GLOBAL_NUMBER: AtomicUsize = AtomicUsize::new(0);
 
@@ -135,6 +139,7 @@ impl Comment {
 
     #[inline]
     async fn screenshot(&self) -> crate::Result<PathBuf> {
+        log::info!("Screenshotting comment...");
         let path = self.save_basedir.join(&format!(
             "comment{}.png",
             GLOBAL_NUMBER.fetch_add(1, Ordering::Relaxed)
@@ -186,28 +191,57 @@ impl Comment {
 
     #[inline]
     async fn direct_children(self) -> crate::Result<impl Stream<Item = Comment> + Send + 'static> {
+        log::info!("Calculting direct children for comment...");
+        let id = if let Ok(Some(id)) = self.elem.elem().get_attribute("id").await {
+            log::info!("Current ID is {}", &id);
+            Some(id)
+        } else {
+            None
+        };
         let driver_clone = self.elem.as_owner().clone();
         let basedir_clone = self.save_basedir.clone();
         let (x, y, width, height) = self.screenshot_rect().await?;
-        let direct_children = self
-            .elem
-            .elem()
-            .find_elements(By::XPath(
-                "/div[contains(@class, 'child')]/div[contains(@class, 'comment')]",
-            ))
-            .await?;
-        let direct_children = direct_children
-            .into_iter()
+
+        // get the HTML of the element
+        let html = self.elem.elem().inner_html().await?;
+
+        // get the children out of it
+        let childs = direct_children(html);
+        /*let eclone = self.elem.clone();
+        let childs = stream::iter(childs)
+            .then(move |child_id| eclone.clone().elem().find_element(By::Id(&child_id)))
+            .filter_map(Result::ok)
             .map(move |elem| {
                 (
                     ArcWebElement::new(driver_clone.clone(), elem.element_id),
                     basedir_clone.clone(),
                 )
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+            .await;*/
+
+        // equivalent code but it actually compiles
+        let mut subelems = vec![];
+        let rootelem = self.elem.elem();
+        for child_id in childs {
+            log::info!("Child is {}", &child_id);
+
+            if id.as_deref() == Some(&child_id) {
+                log::warn!("Child ID is equal to our ID");
+            }
+
+            let subelem = rootelem.find_element(By::Id(&child_id)).await?;
+            let subelem = ArcWebElement::new(driver_clone.clone(), subelem.element_id);
+            subelems.push((subelem, basedir_clone.clone()))
+        }
+        mem::drop(rootelem);
+
+        if subelems.is_empty() {
+            log::info!("No direct children found");
+        }
 
         Ok(stream::once(self).chain(
-            stream::iter(direct_children.into_iter())
+            stream::iter(subelems.into_iter())
                 .then(move |(elem, basedir)| {
                     Comment::new(
                         elem,
@@ -239,7 +273,17 @@ impl Comment {
             let s = Box::pin(
                 self.direct_children()
                     .await?
-                    .then(|comment| comment.children())
+                    .enumerate()
+                    .then(|(index, comment)| async move {
+                        // first child doesn't need it
+                        if index == 0 {
+                            let s: Pin<Box<dyn Stream<Item = Comment> + Send + 'static>> =
+                                Box::pin(stream::once(comment));
+                            Ok(s)
+                        } else {
+                            comment.children().await
+                        }
+                    })
                     .filter_map(Result::ok)
                     .flatten(),
             );
@@ -294,14 +338,14 @@ impl Subreddit {
     async fn new(subreddit: &str, net: &str) -> crate::Result<Self> {
         // connect to the server
         let mut caps = DesiredCapabilities::firefox();
-        println!("Connecting to driver...");
+        log::info!("Connecting to driver...");
         let driver = WebDriver::new_with_timeout(
             "http://localhost:4444",
             caps,
             Some(Duration::from_secs(10)),
         )
         .await?;
-        println!("Connected!");
+        log::info!("Connected!");
 
         // visit the subreddit page
         driver
@@ -410,6 +454,7 @@ impl RedditThread {
             .find_elements(By::Tag("p"))
             .await?
             .into_iter()
+            .skip(4)
             .map(move |element| ArcWebElement::new(driver_clone.clone(), element.element_id))
             .collect())
     }
@@ -419,7 +464,9 @@ impl RedditThread {
         &self,
         basedir: Arc<Path>,
     ) -> crate::Result<impl Stream<Item = Frame> + Send + 'static> {
-        Ok(stream::iter(self.paragraphs().await?.into_iter())
+        let paragraphs = self.paragraphs().await?;
+        log::info!("Globbed paragraphs!");
+        Ok(stream::iter(paragraphs.into_iter())
             .map(move |item| (basedir.clone(), item))
             .then(|(basedir, item)| async move {
                 let driver = item.as_owner();
@@ -446,12 +493,12 @@ impl RedditThread {
     async fn comment_elements(&self) -> crate::Result<Vec<ArcWebElement>> {
         log::info!("Globbing comments...");
         let driver_clone = self.driver.clone();
-        Ok(driver_clone
-            .clone()
-            .find_element(By::ClassName("sitetable"))
-            .await?
-            .find_elements(By::XPath("/div[contains(@class, 'comment')]"))
-            .await?
+        let comments = self
+            .driver
+            .find_elements(By::Css(".sitetable > div[itemtype]"))
+            .await?;
+        log::info!("Found comments");
+        Ok(comments
             .into_iter()
             .map(move |elem| ArcWebElement::new(driver_clone.clone(), elem.element_id))
             .collect::<Vec<_>>())
@@ -533,6 +580,8 @@ pub async fn reddit_text_source(
         })
         .filter_map(|r| if let Ok(Some(t)) = r { Some(t) } else { None })
         .flatten();
+
+    log::info!("Constructing final stream...");
 
     // we should have all the frames we need, put them together
     Ok(stream::once(titleframe)

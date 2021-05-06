@@ -43,10 +43,11 @@ macro_rules! reddit_text_source {
     ($sub: expr, $ut: expr, $ct: expr, $rt: expr, $net: expr) => {{
         |cx| {
             Box::pin(async move {
-                process::process(
-                    reddit_text_source::reddit_text_source($sub, $ut, $ct, $rt, $net, &cx).await?,
-                )
-                .await
+                let f =
+                    reddit_text_source::reddit_text_source($sub, $ut, $ct, $rt, $net, &cx).await?;
+                log::info!("Created reddit text stream source");
+
+                process::process(f).await
             })
         }
     }};
@@ -55,7 +56,7 @@ macro_rules! reddit_text_source {
 const FRAME_SOURCES: &[fn(
     Arc<Context>,
 ) -> Pin<Box<dyn Future<Output = crate::Result> + Send + 'static>>] =
-    &[reddit_text_source!("AskReddit", 10000, 1000, 100, "day")];
+    &[reddit_text_source!("AskReddit", 500, 200, 100, "day")];
 
 #[inline]
 async fn entry(homedir: PathBuf) -> crate::Result {

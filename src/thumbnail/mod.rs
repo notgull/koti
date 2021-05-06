@@ -18,7 +18,9 @@
 use crate::context::Context;
 
 pub async fn create_thumbnail(ctx: &Context) -> crate::Result {
+    log::info!("Waiting for thumbnail info");
     ctx.wait_for_thumbnail().await;
+    log::info!("Thumbnail wait ended!");
 
     Ok(())
 }

@@ -93,7 +93,7 @@ impl Context {
         }
 
         mem::drop(core);
-        self.thumbnail_ready.notify(usize::MAX);
+        self.thumbnail_ready.notify_additional(usize::MAX);
     }
 
     #[inline]

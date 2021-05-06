@@ -17,11 +17,13 @@
 
 use std::{
     fs::File,
+    future::Future,
     io::{prelude::*, BufReader, BufWriter},
     mem,
     path::Path,
     pin::Pin,
     sync::Arc,
+    task::{Context, Poll},
 };
 use thirtyfour::{
     common::types::{ElementId, ElementRect},
@@ -106,5 +108,36 @@ impl ArcWebElement {
     #[inline]
     pub fn elem(&self) -> WebElement<'_> {
         WebElement::new(&self.driver.session, self.element_id.clone())
+    }
+}
+
+pin_project_lite::pin_project! {
+    pub struct MapFuture<Fut, F> {
+        #[pin]
+        inner: Fut,
+        f: Option<F>,
+    }
+}
+
+impl<Fut, F> MapFuture<Fut, F> {
+    #[inline]
+    pub fn new(inner: Fut, f: F) -> Self {
+        Self { inner, f: Some(f) }
+    }
+}
+
+impl<B, Fut: Future, F: FnOnce(Fut::Output) -> B> Future for MapFuture<Fut, F> {
+    type Output = B;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<B> {
+        let this = self.project();
+
+        match this.inner.poll(ctx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(g) => {
+                Poll::Ready((this.f.take().expect("Future polled after completion"))(g))
+            }
+        }
     }
 }
