@@ -32,6 +32,7 @@ use thirtyfour::{
     common::types::{ElementId, ElementRect},
     prelude::*,
 };
+use tokio::task::JoinError;
 
 #[inline]
 pub async fn cropped_screenshot(
@@ -167,6 +168,50 @@ pub fn timeout<Fut: Future>(
             Err(crate::Error::Timeout)
         }),
     )
+}
+
+pin_project_lite::pin_project! {
+    #[project = ImmediateOrTaskProjection]
+    pub enum ImmediateOrTask<T> {
+        Immediate {
+            #[pin]
+            r: future::Ready<T>
+        },
+        Task {
+            #[pin]
+            t: tokio::task::JoinHandle<T>
+        },
+    }
+}
+
+impl<T> From<future::Ready<T>> for ImmediateOrTask<T> {
+    #[inline]
+    fn from(f: future::Ready<T>) -> Self {
+        Self::Immediate { r: f }
+    }
+}
+
+impl<T> From<tokio::task::JoinHandle<T>> for ImmediateOrTask<T> {
+    #[inline]
+    fn from(t: tokio::task::JoinHandle<T>) -> Self {
+        Self::Task { t }
+    }
+}
+
+impl<T> Future for ImmediateOrTask<T> {
+    type Output = Result<T, JoinError>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        match this {
+            ImmediateOrTaskProjection::Immediate { r } => match r.poll(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(t) => Poll::Ready(Ok(t)),
+            },
+            ImmediateOrTaskProjection::Task { t } => t.poll(cx),
+        }
+    }
 }
 
 #[test]

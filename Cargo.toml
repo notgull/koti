@@ -8,13 +8,21 @@ edition = "2018"
 dirs = "3"
 env_logger = { version = "0.8", default-features = false, features = ["atty", "termcolor"] }
 event-listener = "2.5"
-futures-lite = "1"
+futures-lite = "1.11"
 genawaiter = { version = "0.99", default-features = false }
+hound = "3.4"
 log = "0.4"
 nanorand = "0.5.2"
 image = "0.23.14"
 once_cell = { version = "1.7", features = ["parking_lot"] }
 pin-project-lite = "0.2"
 quick-xml = "0.22"
+rusttype = "0.9"
 thirtyfour = { version = "0.23.0", features = ["tokio-runtime"] }
 tokio = { version = "1.5", features = ["rt", "rt-multi-thread", "fs", "net", "io-util", "parking_lot", "process", "sync"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

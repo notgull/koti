@@ -19,6 +19,9 @@ use event_listener::{Event, EventListener};
 use std::{mem, path::PathBuf};
 use tokio::sync::Mutex;
 
+const VIDEO_WIDTH: usize = 1280;
+const VIDEO_HEIGHT: usize = 720;
+
 #[derive(Debug, Default)]
 struct ContextCore {
     thumbnail_template: Option<PathBuf>,
@@ -119,5 +122,11 @@ impl Context {
     #[inline]
     pub async fn wait_for_thumbnail(&self) {
         self.thumbnail_ready.listen().await
+    }
+
+    #[inline]
+    pub fn video_size(&self) -> (usize, usize) {
+        // putting this in here because I might want to make this pluggable at some point
+        (VIDEO_WIDTH, VIDEO_HEIGHT)
     }
 }

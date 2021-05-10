@@ -18,6 +18,7 @@
 pub mod context;
 mod error;
 pub mod frame;
+pub mod image_size;
 mod process;
 mod reddit_text_source;
 mod thumbnail;
@@ -53,7 +54,7 @@ macro_rules! reddit_text_source {
                 let f = reddit_text_source::reddit_text_source(sub, ut, ct, rt, net, &cx).await?;
                 println!("Created reddit text stream source");
 
-                process::process(f).await
+                process::process(f, cx).await
             }
 
             Box::pin(inner($sub, $ut, $ct, $rt, $net, cx))
@@ -88,7 +89,7 @@ async fn entry(homedir: PathBuf) -> crate::Result {
         #[inline]
         fn drop(&mut self) {
             let ctx = self.0.clone();
-            tokio::spawn(async move { tokio::fs::remove_dir_all(ctx.basedir().await).await });
+            //tokio::spawn(async move { tokio::fs::remove_dir_all(ctx.basedir().await).await });
         }
     }
 
@@ -99,7 +100,7 @@ async fn entry(homedir: PathBuf) -> crate::Result {
 
     // spawn two tasks: one for creating the thumbnail and one for creating the video proper
     let ctx_clone = ctx.clone();
-    /*let ctx_clone2 = ctx.clone();
+    let ctx_clone2 = ctx.clone();
     let t1 = tokio::spawn(async move { frame_source(ctx_clone).await });
     let t2 = tokio::spawn(async move {
         let ctx = ctx_clone2;
@@ -108,21 +109,11 @@ async fn entry(homedir: PathBuf) -> crate::Result {
 
     let (t1, t2) = futures_lite::future::zip(t1, t2).await;
     t1??;
-    t2??;*/
-    frame_source(ctx_clone).await?;
+    t2??;
 
     // now that we have a video and a thumbnail, upload to YouTube
     youtube::upload_to_youtube(&ctx).await
 }
-
-/*#[inline]
-async fn entry(homedir: PathBuf) -> crate::Result {
-    let cx = Context::default();
-    reddit_text_source::reddit_text_source("AskReddit", 1000, 200, 100, "day", &cx)
-                    .await?.for_each(|f| log::info!("{:?}", f)).await;
-
-    Ok(())
-}*/
 
 fn main() {
     // sets up the logging framework

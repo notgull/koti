@@ -15,13 +15,16 @@
  * along with KOTI.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::path::PathBuf;
+use image::GenericImageView;
+use std::path::Path;
 
-#[derive(Debug, Clone)]
-pub struct Frame {
-    pub tts: String,
-    pub overlaid: String,
-    pub imagepath: Option<PathBuf>,
-    pub imagefadesin: bool,
-    pub persists_after_tts: f32,
+#[inline]
+pub async fn image_size(img: &Path) -> crate::Result<(u32, u32)> {
+    log::info!("Getting image size: {:?}", img);
+    let imgpath = img.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let mut im = image::open(&imgpath)?;
+        Ok(im.dimensions())
+    })
+    .await?
 }

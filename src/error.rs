@@ -16,6 +16,7 @@
  */
 
 use image::ImageError;
+use quick_xml::Error as XmlError;
 use std::{fmt, io::Error as IoError};
 use thirtyfour::error::WebDriverError;
 use tokio::task::JoinError;
@@ -31,6 +32,9 @@ pub enum Error {
     NumParseError,
     ScoreTimedOut,
     Timeout,
+    EspeakError(Option<i32>, Option<String>),
+    Hound(hound::Error),
+    Xml(XmlError),
 }
 
 impl fmt::Display for Error {
@@ -46,6 +50,14 @@ impl fmt::Display for Error {
             Self::NumParseError => f.write_str("Could not parse number"),
             Self::ScoreTimedOut => f.write_str("Score timed out"),
             Self::Timeout => f.write_str("Operation timed out"),
+            Self::EspeakError(None, None) => f.write_str("Espeak failed"),
+            Self::EspeakError(Some(code), None) => write!(f, "Espeak failed with code {}", code),
+            Self::EspeakError(None, Some(err)) => write!(f, "Espeak failed: {}", err),
+            Self::EspeakError(Some(code), Some(err)) => {
+                write!(f, "Espeak failed with code {}: {}", code, err)
+            }
+            Self::Hound(h) => fmt::Display::fmt(h, f),
+            Self::Xml(x) => fmt::Display::fmt(x, f),
         }
     }
 }
@@ -75,6 +87,20 @@ impl From<JoinError> for Error {
     #[inline]
     fn from(j: JoinError) -> Error {
         Self::Join(j)
+    }
+}
+
+impl From<hound::Error> for Error {
+    #[inline]
+    fn from(h: hound::Error) -> Error {
+        Self::Hound(h)
+    }
+}
+
+impl From<XmlError> for Error {
+    #[inline]
+    fn from(x: XmlError) -> Error {
+        Self::Xml(x)
     }
 }
 
