@@ -19,15 +19,18 @@ use event_listener::{Event, EventListener};
 use std::{mem, path::PathBuf};
 use tokio::sync::Mutex;
 
-const VIDEO_WIDTH: usize = 1280;
-const VIDEO_HEIGHT: usize = 720;
+const VIDEO_WIDTH: usize = 1920;
+const VIDEO_HEIGHT: usize = 108;
 
 #[derive(Debug, Default)]
 struct ContextCore {
     thumbnail_template: Option<PathBuf>,
     thumbnail_text: Option<String>,
     video_title: Option<String>,
+    video_description: String,
+    video_path: Option<PathBuf>,
     basedir: Option<PathBuf>,
+    datadir: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -44,7 +47,10 @@ impl Context {
                 thumbnail_template: None,
                 thumbnail_text: None,
                 video_title: None,
+                video_description: String::new(),
+                video_path: None,
                 basedir: None,
+                datadir: None,
             }),
             thumbnail_ready: Event::new(),
         }
@@ -58,8 +64,20 @@ impl Context {
     }
 
     #[inline]
+    pub async fn set_datadir(&self, datadir: PathBuf) {
+        if mem::replace(&mut self.core.lock().await.datadir, Some(datadir)).is_some() {
+            panic!("Datadir already exists!");
+        }
+    }
+
+    #[inline]
     pub async fn basedir(&self) -> PathBuf {
         self.core.lock().await.basedir.clone().unwrap()
+    }
+
+    #[inline]
+    pub async fn datadir(&self) -> PathBuf {
+        self.core.lock().await.datadir.clone().unwrap()
     }
 
     #[inline]
@@ -125,8 +143,20 @@ impl Context {
     }
 
     #[inline]
+    pub async fn set_video_path(&self, vidpath: PathBuf) {
+        if mem::replace(&mut self.core.lock().await.video_path, Some(vidpath)).is_some() {
+            panic!("Vidpath already existed!");
+        }
+    }
+
+    #[inline]
     pub fn video_size(&self) -> (usize, usize) {
         // putting this in here because I might want to make this pluggable at some point
         (VIDEO_WIDTH, VIDEO_HEIGHT)
+    }
+
+    #[inline]
+    pub async fn append_to_description(&self, desc: String) {
+        self.core.lock().await.video_description.push_str(&desc);
     }
 }

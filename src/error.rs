@@ -17,6 +17,7 @@
 
 use image::ImageError;
 use quick_xml::Error as XmlError;
+use serde_json::Error as JsonError;
 use std::{fmt, io::Error as IoError};
 use thirtyfour::error::WebDriverError;
 use tokio::task::JoinError;
@@ -29,6 +30,7 @@ pub enum Error {
     Selenium(WebDriverError),
     Image(ImageError),
     Join(JoinError),
+    Json(JsonError),
     NumParseError,
     ScoreTimedOut,
     Timeout,
@@ -47,6 +49,7 @@ impl fmt::Display for Error {
             Self::Selenium(w) => fmt::Display::fmt(w, f),
             Self::Image(i) => fmt::Display::fmt(i, f),
             Self::Join(j) => fmt::Display::fmt(j, f),
+            Self::Json(j) => fmt::Display::fmt(j, f),
             Self::NumParseError => f.write_str("Could not parse number"),
             Self::ScoreTimedOut => f.write_str("Score timed out"),
             Self::Timeout => f.write_str("Operation timed out"),
@@ -101,6 +104,13 @@ impl From<XmlError> for Error {
     #[inline]
     fn from(x: XmlError) -> Error {
         Self::Xml(x)
+    }
+}
+
+impl From<JsonError> for Error {
+    #[inline]
+    fn from(j: JsonError) -> Error {
+        Self::Json(j)
     }
 }
 

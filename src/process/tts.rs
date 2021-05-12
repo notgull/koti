@@ -25,7 +25,7 @@ use std::{
 };
 use tokio::{io::AsyncWriteExt, process::Command};
 
-const WORD_SPACE: &str = "8";
+const WORD_SPACE: &str = "4";
 
 static TTS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 

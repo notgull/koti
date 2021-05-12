@@ -15,16 +15,17 @@
  * along with KOTI.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use super::{overlay::text_overlay, tts::create_tts};
+use super::{overlay::text_overlay, seconds_to_frames, tts::create_tts};
 use crate::{
     context::Context,
     frame::Frame,
     image_size::image_size,
+    mlt::{Filter, Mlt, PlaylistEntry},
     util::{ImmediateOrTask, MapFuture},
 };
 use futures_lite::future;
 use quick_xml::Writer;
-use std::{path::PathBuf, sync::Arc};
+use std::{array::IntoIter as ArrayIter, iter, mem, path::PathBuf, sync::Arc};
 use tokio::process::Command;
 
 #[inline]
@@ -40,7 +41,7 @@ pub struct ConvertedFrame {
     fg_image: Option<(PathBuf, u32, u32)>,
     fades_in_after: Option<f32>,
     text_overlay: Option<(PathBuf, u32, u32)>,
-    tts_audio: Option<PathBuf>,
+    tts_audio: Option<(PathBuf, f32)>,
     duration: f32,
 }
 
@@ -103,7 +104,7 @@ impl ConvertedFrame {
 
         Ok(ConvertedFrame {
             fg_image,
-            tts_audio: tts_audio.map(|(t, _)| t),
+            tts_audio,
             text_overlay,
             fades_in_after: if imagefadesin { Some(1.0) } else { None },
             duration: persists_after_tts + duration,
@@ -116,7 +117,179 @@ impl ConvertedFrame {
     }
 
     #[inline]
-    pub fn add_frame_to_melt<T: std::io::Write>(self, outxml: &mut Writer<T>) -> crate::Result {
-        Ok(())
+    pub fn into_tractor(mut self, mlt: &mut Mlt, ctx: &Context) -> crate::Result<(String, usize)> {
+        // three ways of doing this:
+        // we just have one image (either the overlay or the direct image)
+        // we have both
+        let fg_image = self.fg_image.take();
+        let text_overlay = self.text_overlay.take();
+        let duration = seconds_to_frames(self.duration);
+
+        Ok((
+            match (fg_image, text_overlay) {
+                (None, None) => panic!("blank frame?"),
+                (Some((img, w, h)), None) | (None, Some((img, w, h))) => {
+                    self.into_tractor_1_image(mlt, img, w, h)?
+                }
+                (Some((img1, w1, h1)), Some((img2, w2, h2))) => {
+                    self.into_tractor_2_images(mlt, img1, w1, h1, img2, w2, h2, ctx)?
+                }
+            },
+            duration,
+        ))
+    }
+
+    #[inline]
+    fn into_tractor_1_image(
+        mut self,
+        mlt: &mut Mlt,
+        img: PathBuf,
+        _w: u32,
+        _h: u32,
+    ) -> crate::Result<String> {
+        // producers:
+        //  * the raw image
+        //  * the audio
+        // playlist:
+        //  * one for each
+        // tractor:
+        //  * multitrack for each playlist
+        let total_duration = seconds_to_frames(self.duration);
+        let audio: Option<PathBuf> = self.tts_audio.map(|(t, _)| t);
+
+        // producers
+        let producer1 = mlt.add_producer(img).to_string();
+        let producer2 = audio.map(|audio| mlt.add_producer(audio).to_string());
+
+        // playlists
+        let playlist1 = mlt
+            .add_playlist(
+                iter::once(PlaylistEntry::Producer {
+                    id: producer1,
+                    start: 0,
+                    end: total_duration,
+                }),
+                iter::empty(),
+            )
+            .to_string();
+        let playlist2 = producer2.map(|producer2| {
+            mlt.add_playlist(
+                iter::once(PlaylistEntry::Producer {
+                    id: producer2,
+                    start: 0,
+                    end: total_duration,
+                }),
+                iter::empty(),
+            )
+            .to_string()
+        });
+
+        // tractor
+        let tractor = mlt
+            .add_tractor(iter::once(playlist1).chain(playlist2), iter::empty())
+            .to_string();
+
+        Ok(tractor)
+    }
+
+    #[inline]
+    fn into_tractor_2_images(
+        mut self,
+        mlt: &mut Mlt,
+        img1: PathBuf,
+        w1: u32,
+        h1: u32,
+        img2: PathBuf,
+        w2: u32,
+        h2: u32,
+        ctx: &Context,
+    ) -> crate::Result<String> {
+        // producers:
+        //  * first image
+        //  * second image
+        //  * tts audio
+        // playlists:
+        //  * audio
+        //  * one for each image, with a size adjustment filter
+        // tractors:
+        //  * combines each playlist
+        let duration = seconds_to_frames(self.duration);
+        let audio = self.tts_audio.map(|(audio, _)| audio);
+        let (video_width, video_height) = ctx.video_size();
+
+        // figure out the transform we should do for each image
+        // first, figure out the width and height for each image. we get the ratio of each image's height first
+        let r1 = (h1 as f32) / ((h1 + h2) as f32);
+        let r2 = (h2 as f32) / ((h1 + h2) as f32);
+
+        // multiply the video width and height by these ratios to get the final widths and height for each
+        let (vw, vh) = (video_width as f32, video_height as f32);
+        let (cw1, ch1) = ((vw * r1) as usize, (vh * r1) as usize);
+        let (cw2, ch2) = ((vw * r1) as usize, (vh * r2) as usize);
+
+        // figure out the y coordinates for the images
+        let y1 = ((vh - ch2 as f32) / 2.0) as usize;
+        let y2 = y1 + ch2;
+
+        // set up the producers
+        let img1 = mlt.add_producer(img1).to_string();
+        let img2 = mlt.add_producer(img2).to_string();
+        let audio = audio.map(|audio| mlt.add_producer(audio).to_string());
+
+        // playlists use an affine transform
+        let img1 = mlt
+            .add_playlist(
+                iter::once(PlaylistEntry::Producer {
+                    id: img1,
+                    start: 0,
+                    end: duration,
+                }),
+                iter::once(
+                    Filter::new("affine".to_string())
+                        .property("background".to_string(), "colour:0".to_string())
+                        .property(
+                            "transition.geometry".to_string(),
+                            format!("0=0 {} {} {}", y1, cw1, ch1),
+                        )
+                        .property("transition.distort".to_string(), "0".to_string()),
+                ),
+            )
+            .to_string();
+        let img2 = mlt
+            .add_playlist(
+                iter::once(PlaylistEntry::Producer {
+                    id: img2,
+                    start: 0,
+                    end: duration,
+                }),
+                iter::once(
+                    Filter::new("affine".to_string())
+                        .property("background".to_string(), "colour:0".to_string())
+                        .property(
+                            "transition.geometry".to_string(),
+                            format!("0=0 {} {} {}", y2, cw2, ch2),
+                        )
+                        .property("transition.distort".to_string(), "0".to_string()),
+                ),
+            )
+            .to_string();
+        let audio = audio.map(|audio| {
+            mlt.add_playlist(
+                iter::once(PlaylistEntry::Producer {
+                    id: audio,
+                    start: 0,
+                    end: duration,
+                }),
+                iter::empty(),
+            )
+            .to_string()
+        });
+
+        // set up the tractor
+        let tractor = mlt
+            .add_tractor(ArrayIter::new([img1, img2]).chain(audio), iter::empty())
+            .to_string();
+
+        Ok(tractor)
     }
 }

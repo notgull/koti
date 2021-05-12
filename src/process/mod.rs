@@ -17,6 +17,7 @@
 
 use crate::{
     context::Context,
+    mlt::{Filter, PlaylistEntry},
     util::{ImmediateOrTask, MapFuture},
     Frame,
 };
@@ -24,20 +25,26 @@ use futures_lite::{
     future,
     stream::{self, Stream, StreamExt},
 };
+use once_cell::sync::Lazy;
 use quick_xml::{
     events::{BytesDecl, BytesEnd, BytesStart, Event},
     Writer,
 };
-use std::{io::BufWriter, os::unix::ffi::OsStrExt, sync::Arc};
+use regex::Regex;
+use std::{
+    array::IntoIter as ArrayIter, io::BufWriter, iter, mem, os::unix::ffi::OsStrExt,
+    process::Stdio, str::FromStr, sync::Arc,
+};
 use tokio::{fs::File, process::Command};
 
 mod frame;
 pub mod overlay;
 pub mod tts;
 
+pub const FPS: f32 = 29.97;
+
 #[inline]
 fn seconds_to_frames(s: f32) -> usize {
-    const FPS: f32 = 29.97;
     (s * FPS) as usize
 }
 
@@ -51,6 +58,62 @@ macro_rules! s {
 pub async fn process<S: Stream<Item = Frame>>(frames: S, ctx: Arc<Context>) -> crate::Result {
     let basedir = ctx.basedir().await;
 
+    // launch an alternate task to choose a piece of music
+    let ctx_clone = ctx.clone();
+    let musictask = tokio::spawn(async move {
+        static DURATION_REGEX: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"Duration: (\d\d):(\d\d):(\d\d).(\d\d)").expect("Regex failed to compile")
+        });
+
+        let music = crate::music::Music::load(&ctx_clone).await?;
+        let (path, attr) = music.random_track();
+
+        // figure out the length of the sound file using ffmpeg
+        let mut c = Command::new("ffmpeg")
+            .arg("-i")
+            .arg(path)
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .output()
+            .await?;
+
+        // it is supposed to fail
+
+        let mut textout =
+            String::from_utf8(mem::take(&mut c.stdout)).expect("ffmpeg output isn't utf-8?");
+        textout.extend(iter::once(
+            String::from_utf8(c.stderr).expect("ffmpeg stderr isn't utf-8?"),
+        ));
+        let total: f32 = match DURATION_REGEX.captures(&textout) {
+            Some(caps) => caps
+                .iter()
+                .skip(1)
+                .map(|cap| match cap {
+                    Some(cap) => usize::from_str(cap.as_str()).expect("Not really an f64?") as f32,
+                    None => panic!("Should've participated?"),
+                })
+                .enumerate()
+                .fold(0.0, |sum, (index, value)| {
+                    let multiplier: f32 = match index {
+                        0 => 360.0,
+                        1 => 60.0,
+                        2 => 1.0,
+                        3 => 0.01,
+                        _ => panic!("More than four captures?"),
+                    };
+
+                    sum + (value * multiplier)
+                }),
+            None => {
+                return Err(crate::Error::StaticMsg(
+                    "Could not find duration with regex",
+                ))
+            }
+        };
+
+        Ok((path.to_path_buf(), attr.to_string(), total))
+    });
+
     // collect all of the frames into a vector of tasks that are turning those frames into real stuff
     let ctx_clone = ctx.clone();
     let frames_tasks: Vec<_> = frames
@@ -59,99 +122,104 @@ pub async fn process<S: Stream<Item = Frame>>(frames: S, ctx: Arc<Context>) -> c
         .await;
 
     // collect all of the converted frames and add them to the melt command
-    log::info!("Resolving all of the converted frames from their tasks...");
-    let frames: Vec<frame::ConvertedFrame> = stream::iter(frames_tasks.into_iter())
+    let mut duration: usize = 0;
+    let frames = stream::iter(frames_tasks.into_iter())
         .then(std::convert::identity)
         .map(|e| match e {
             Ok(e) => e,
             Err(e) => Err(crate::Error::Join(e)),
+        });
+
+    // configure melt to use these frames
+    let (video_width, video_height) = ctx.video_size();
+    let mut mlt = crate::mlt::Mlt::new(&basedir, video_width, video_height);
+
+    // TODO: intro
+
+    // map each frame into an mlt action
+    log::info!("Resolving all of the converted frames from their tasks...");
+    let frame_tractors: Vec<(String, usize)> = frames
+        .map(|frame| match frame {
+            Ok(frame) => match frame.into_tractor(&mut mlt, &ctx) {
+                Ok((tractor, dur)) => {
+                    duration += dur;
+                    Ok((tractor, dur))
+                }
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
         })
         .try_collect()
         .await?;
-    let duration: f32 = frames.iter().map(|f| f.duration()).sum();
 
-    // open an xml file
-    let xmlpath = basedir.join("project.mlt");
-    let xmlfile = File::create(&xmlpath).await?;
-    let mut xreader = Writer::new(BufWriter::new(xmlfile.into_std().await));
+    // TODO: outro
 
-    let videopath = basedir.join("video.webm");
-    let videopathclone = videopath.clone();
+    // combine the tractors into a single playlist
+    let frame_playlist = mlt
+        .add_playlist(
+            frame_tractors
+                .into_iter()
+                .map(|(tractor, dur)| PlaylistEntry::Producer {
+                    id: tractor,
+                    start: 0,
+                    end: dur,
+                }),
+            iter::empty(),
+        )
+        .to_string();
 
-    // write to xml file
-    let ctx_clone = ctx.clone();
-    tokio::task::spawn_blocking(move || {
-        xreader.write_event(Event::Decl(BytesDecl::new(b"1.0", Some(b"utf-8"), None)))?;
+    // by now, we should be done choosing a music entry
+    let (musicpath, attr, musicdur) = musictask.await??;
+    let musicdur = seconds_to_frames(musicdur);
+    ctx.append_to_description(format!("Music Credits:\n{}\n", attr))
+        .await;
 
-        // mlt opener
-        let basedir_utf8 = basedir.as_os_str().to_str().expect("Basedir is not utf-8");
-        let videopath_utf8 = videopathclone
-            .as_os_str()
-            .to_str()
-            .expect("Videopath is not utf-8?");
-        let opener = BytesStart::borrowed_name(b"mlt".as_ref()).with_attributes(vec![
-            (s!(b"title"), s!(b"King of the Internet")),
-            (s!(b"LC_NUMERIC"), s!(b"en_US.UTF-8")),
-            (s!(b"root"), basedir_utf8.as_bytes()),
-            (s!(b"producer"), s!(b"outpile")),
-        ]);
+    // create a producer for the music and a playlist that plays the music over and over until we reach the total duration
+    let music_producer = mlt.add_producer(musicpath).to_string();
+    let music_playlist = mlt
+        .add_playlist(
+            iter::repeat(music_producer).scan(duration, |duration, prod| {
+                let len = match duration.checked_sub(musicdur) {
+                    Some(newdur) => {
+                        *duration = newdur;
+                        musicdur
+                    }
+                    None if *duration == 0 => {
+                        return None;
+                    }
+                    None => {
+                        let d = mem::replace(duration, 0);
+                        d
+                    }
+                };
+                Some(PlaylistEntry::Producer {
+                    id: prod,
+                    start: 0,
+                    end: len,
+                })
+            }),
+            iter::once(
+                Filter::new("volume".to_string()).property("max_gain".to_string(), {
+                    // change to taste
+                    "-10dB".to_string()
+                }),
+            ),
+        )
+        .to_string();
 
-        xreader.write_event(Event::Start(opener.to_borrowed()))?;
+    // use both as tracks
+    let main_tractor = mlt
+        .add_tractor(
+            ArrayIter::new([frame_playlist, /*music_playlist*/]),
+            iter::empty(),
+        )
+        .to_string();
 
-        let (video_width, video_height) = ctx_clone.video_size();
-        let (video_width, video_height) = (video_width.to_string(), video_height.to_string());
+    // run mlt
+    let outvideo = mlt.run(main_tractor, duration).await?;
 
-        // set up a profile
-        xreader.write_event(Event::Empty(
-            BytesStart::borrowed_name(b"profile").with_attributes(vec![
-                (s!(b"frame_rate_num"), s!(b"30000")),
-                (s!(b"sample_aspect_num"), s!(b"1")),
-                (s!(b"display_aspect_den"), s!(b"9")),
-                (s!(b"colorspace"), s!(b"709")),
-                (s!(b"progressive"), s!(b"1")),
-                (s!(b"display_aspect_num"), s!(b"16")),
-                (s!(b"frame_rate_den"), s!(b"1001")),
-                (s!(b"width"), video_width.as_bytes()),
-                (s!(b"height"), video_height.as_bytes()),
-                (s!(b"sample_aspect_den"), s!(b"1")),
-            ]),
-        ))?;
-
-        let framecount = seconds_to_frames(duration);
-        let frames_s = framecount.to_string();
-
-        // set up a consumer that outputs the video
-        xreader.write_event(Event::Empty(
-            BytesStart::borrowed_name(b"consumer").with_attributes(vec![
-                (s!(b"f"), s!(b"webm")),
-                (s!(b"cpu-used"), s!(b"4")),
-                (s!(b"crf"), s!(b"23")),
-                (s!(b"aq"), s!(b"6")),
-                (s!(b"max-intra-rate"), s!(b"1000")),
-                (s!(b"target"), videopath_utf8.as_bytes()),
-                (s!(b"threads"), s!(b"0")),
-                (s!(b"real_time"), s!(b"-3")),
-                (s!(b"mlt_service"), s!(b"avformat")),
-                (s!(b"vcodec"), s!(b"libvpx")),
-                (s!(b"quality"), s!(b"good")),
-                (s!(b"acodec"), s!(b"libvorbis")),
-                (s!(b"in"), s!(b"0")),
-                (s!(b"out"), frames_s.as_bytes()),
-            ]),
-        ))?;
-
-        for f in frames {
-            f.add_frame_to_melt(&mut xreader)?;
-        }
-
-        xreader.write_event(Event::End(opener.to_end()))?;
-
-        crate::Result::Ok(())
-    })
-    .await??;
-
-    // run the melt command
-    log::info!("Running melt command...");
+    // register the outvideo in the context and return
+    ctx.set_video_path(outvideo).await;
 
     Ok(())
 }

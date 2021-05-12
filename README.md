@@ -7,3 +7,4 @@ You will need:
 * pico2wave ("libttspico-utils")
 * festival ("festival", "festvox-us-slt-hts")
 * melt
+* ffmpeg

@@ -19,6 +19,8 @@ pub mod context;
 mod error;
 pub mod frame;
 pub mod image_size;
+pub mod mlt;
+pub mod music;
 mod process;
 mod reddit_text_source;
 mod thumbnail;
@@ -28,15 +30,18 @@ mod youtube;
 pub use error::*;
 pub use frame::*;
 
+use clap::{App, Arg, SubCommand};
 use context::Context;
 use futures_lite::stream::{self, Stream, StreamExt};
 use nanorand::{tls_rng, RNG};
 use std::{
+    env,
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
 };
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
 const THREAD_COUNT: usize = 4;
 
@@ -68,7 +73,7 @@ const FRAME_SOURCES: &[fn(
     &[reddit_text_source!("AskReddit", 500, 200, 100, "day")];
 
 #[inline]
-async fn entry(homedir: PathBuf) -> crate::Result {
+async fn create_video(homedir: PathBuf, datadir: PathBuf) -> crate::Result {
     // create the context
     let ctx = Arc::new(context::Context::default());
 
@@ -81,6 +86,7 @@ async fn entry(homedir: PathBuf) -> crate::Result {
     tokio::fs::create_dir_all(&basedir).await?;
 
     ctx.set_basedir(basedir).await;
+    ctx.set_datadir(datadir).await;
 
     // create a guard that deletes the base directory on exit
     struct DeleteTheBasedirOnExit(Arc<Context>);
@@ -115,12 +121,88 @@ async fn entry(homedir: PathBuf) -> crate::Result {
     youtube::upload_to_youtube(&ctx).await
 }
 
+#[inline]
+async fn add_music_track(datadir: PathBuf, name: String, musicpath: PathBuf) -> crate::Result {
+    let ctx = context::Context::default();
+    tokio::fs::create_dir_all(&datadir).await?;
+    ctx.set_datadir(datadir).await;
+
+    let mut cout = io::stdout();
+    let mut cin = io::stdin();
+    let mut attribution = String::new();
+
+    cout.write_all(b"Write the attribution for the music below:\n")
+        .await?;
+    cin.read_to_string(&mut attribution).await?;
+
+    let mut m = music::Music::load(&ctx).await?;
+    m.add_track(name, musicpath, attribution);
+    m.save(&ctx).await?;
+
+    cout.write_all(b"Saved!\n").await?;
+
+    Ok(())
+}
+
 fn main() {
     // sets up the logging framework
     env_logger::init();
 
-    // get the home directory
+    // get the home directory and KOTI data directory
     let path = dirs::home_dir().unwrap_or_else(|| Path::new("/").to_path_buf());
+    let default_datadir = {
+        let p: Option<PathBuf> = env::var_os("KOTI_DATA").map(|e| e.into());
+        p
+    }
+    .unwrap_or_else(|| match dirs::data_dir() {
+        Some(mut d) => {
+            d.push("koti");
+            d
+        }
+        None => Path::new("/koti").to_path_buf(),
+    });
+
+    // configure the app
+    let matches = App::new("King of the Internet")
+        .version("0.1.0")
+        .author("notgull <jtnunley01@gmail.com>")
+        .about("Automatically aggregates internet content")
+        .arg(
+            Arg::with_name("datadir")
+                .short("d")
+                .long("datadir")
+                .value_name("FILE")
+                .help("Sets the directory that contains KOTI's information")
+                .takes_value(true),
+        )
+        .subcommand(
+            SubCommand::with_name("music")
+                .about("adds or removes music tracks to be selected in video")
+                .subcommand(
+                    SubCommand::with_name("add")
+                        .about("adds a music track")
+                        .arg(
+                            Arg::with_name("trackname")
+                                .index(1)
+                                .required(true)
+                                .help("Name of the track")
+                                .value_name("TRACK_NAME")
+                                .required(true),
+                        )
+                        .arg(
+                            Arg::with_name("trackpath")
+                                .index(2)
+                                .required(true)
+                                .help("Path to the track"),
+                        ),
+                ),
+        )
+        .get_matches();
+
+    let datadir: PathBuf = match matches.value_of_os("datadir") {
+        Some(datadir) => datadir.into(),
+        None => default_datadir,
+    };
 
     // start the tokio multi-threaded runtime
     tokio::runtime::Builder::new_multi_thread()
@@ -128,11 +210,27 @@ fn main() {
         .build()
         .expect("Unable to construct Tokio runtime")
         .block_on(async move {
+            // add a music track if need be
+            if let Some(matches) = matches.subcommand_matches("music") {
+                if let Some(matches) = matches.subcommand_matches("add") {
+                    let trackname = matches.value_of("trackname").unwrap().to_string();
+                    let trackpath: PathBuf = matches.value_of_os("trackpath").unwrap().into();
+                    match tokio::spawn(add_music_track(datadir, trackname, trackpath)).await {
+                        Ok(Ok(())) => (),
+                        Err(e) => log::error!("A panick occurred: {:?}", e),
+                        Ok(Err(e)) => log::error!("Unable to save music track: {:?}", e),
+                    }
+
+                    return;
+                }
+            }
+
+            // try to create a video
             loop {
-                match tokio::spawn(entry(path)).await {
+                match tokio::spawn(create_video(path, datadir)).await {
                     Ok(Ok(())) => break,
                     Err(e) => {
-                        log::error!("Tokio error: {:?}", e);
+                        log::error!("Panick error: {:?}", e);
                         break;
                     }
                     Ok(Err(e)) => {
