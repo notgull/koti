@@ -683,6 +683,7 @@ dependencies = [
  "pin-project-lite",
  "quick-xml",
  "regex",
+ "reqwest",
  "rusttype",
  "serde",
  "serde_json",

@@ -40,6 +40,7 @@ use std::{
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
+    str::FromStr,
     sync::Arc,
 };
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
@@ -111,7 +112,7 @@ async fn create_video(homedir: PathBuf, datadir: PathBuf) -> crate::Result {
     let t1 = tokio::spawn(async move { frame_source(ctx_clone).await });
     let t2 = tokio::spawn(async move {
         let ctx = ctx_clone2;
-        thumbnail::create_thumbnail(&ctx).await
+        thumbnail::create_thumbnail(ctx).await
     });
 
     let (t1, t2) = futures_lite::future::zip(t1, t2).await;
@@ -141,6 +142,27 @@ async fn add_music_track(datadir: PathBuf, name: String, musicpath: PathBuf) -> 
     m.save(&ctx).await?;
 
     cout.write_all(b"Saved!\n").await?;
+
+    Ok(())
+}
+
+#[inline]
+async fn add_thumbnail(
+    datadir: PathBuf,
+    id: String,
+    tpath: PathBuf,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> crate::Result {
+    let ctx = context::Context::default();
+    tokio::fs::create_dir_all(&datadir).await?;
+    ctx.set_datadir(datadir).await;
+
+    thumbnail::add_thumbnail_to_collection(&ctx, id, tpath, x, y, w, h).await?;
+
+    println!("New thumbnail saved!");
 
     Ok(())
 }
@@ -207,8 +229,38 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("thumbnail")
+                .about("adds or removes thumbnail templates")
+                .arg(
+                    Arg::with_name("id")
+                        .index(1)
+                        .required(true)
+                        .value_name("THUMBNAIL_ID"),
+                )
+                .arg(
+                    Arg::with_name("path")
+                        .index(2)
+                        .required(true)
+                        .value_name("BASE_IMAGE_PATH"),
+                )
+                .arg(Arg::with_name("x").index(3).required(true).value_name("X"))
+                .arg(Arg::with_name("y").index(4).required(true).value_name("Y"))
+                .arg(
+                    Arg::with_name("w")
+                        .index(5)
+                        .required(true)
+                        .value_name("WIDTH"),
+                )
+                .arg(
+                    Arg::with_name("h")
+                        .index(6)
+                        .required(true)
+                        .value_name("HEIGHT"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("imagetext")
-                .help("debug feature to debug image text")
+                .about("debug feature to debug image text")
                 .arg(
                     Arg::with_name("path")
                         .index(1)
@@ -219,6 +271,16 @@ fn main() {
                     Arg::with_name("text")
                         .index(2)
                         .value_name("TEXT")
+                        .required(true),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("ytoken")
+                .about("Set the YouTube API token")
+                .arg(
+                    Arg::with_name("token")
+                        .index(1)
+                        .value_name("TOKEN")
                         .required(true),
                 ),
         )
@@ -255,6 +317,43 @@ fn main() {
                     Ok(Ok(())) => (),
                     Err(e) => log::error!("Panicked: {:?}", e),
                     Ok(Err(e)) => log::error!("Unable to draw image: {:?}", e),
+                }
+
+                return;
+            } else if let Some(matches) = matches.subcommand_matches("thumbnail") {
+                let id = matches.value_of("id").unwrap().to_string();
+                let path: PathBuf = matches.value_of_os("path").unwrap().into();
+                let x = u32::from_str(matches.value_of("x").unwrap()).expect("X isn't a number");
+                let y = u32::from_str(matches.value_of("y").unwrap()).expect("Y isn't a number");
+                let w =
+                    u32::from_str(matches.value_of("w").unwrap()).expect("Width isn't a number");
+                let h =
+                    u32::from_str(matches.value_of("h").unwrap()).expect("Height isn't a number");
+
+                match tokio::spawn(add_thumbnail(datadir, id, path, x, y, w, h)).await {
+                    Ok(Ok(())) => (),
+                    Err(e) => log::error!("Panicked: {:?}", e),
+                    Ok(Err(e)) => log::error!("Unable to add thumbnail: {:?}", e),
+                }
+
+                return;
+            } else if let Some(matches) = matches.subcommand_matches("ytoken") {
+                let token = matches.value_of("token").unwrap().to_string();
+                let mut ctx = context::Context::default();
+                tokio::fs::create_dir_all(&datadir)
+                    .await
+                    .expect("Cant make dir");
+                ctx.set_datadir(datadir).await;
+
+                match tokio::spawn(async move {
+                    let ctx = ctx;
+                    youtube::set_token(&ctx, token).await
+                })
+                .await
+                {
+                    Ok(Ok(())) => (),
+                    Err(e) => log::error!("Panicked: {:?}", e),
+                    Ok(Err(e)) => log::error!("Unable to set token: {:?}", e),
                 }
 
                 return;

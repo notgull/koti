@@ -24,8 +24,9 @@ const VIDEO_HEIGHT: usize = 1080;
 
 #[derive(Debug, Default)]
 struct ContextCore {
-    thumbnail_template: Option<PathBuf>,
+    thumbnail_template: Option<String>,
     thumbnail_text: Option<String>,
+    thumbnail_path: Option<PathBuf>,
     video_title: Option<String>,
     video_description: String,
     video_path: Option<PathBuf>,
@@ -46,6 +47,7 @@ impl Context {
             core: Mutex::const_new(ContextCore {
                 thumbnail_template: None,
                 thumbnail_text: None,
+                thumbnail_path: None,
                 video_title: None,
                 video_description: String::new(),
                 video_path: None,
@@ -104,7 +106,7 @@ impl Context {
     }
 
     #[inline]
-    pub async fn set_thumbnail(&self, text: String, template: PathBuf) {
+    pub async fn set_thumbnail(&self, text: String, template: String) {
         let mut core = self.core.lock().await;
         if mem::replace(&mut core.thumbnail_text, Some(text)).is_some() {
             panic!("Thumbnail text already exists!");
@@ -128,7 +130,7 @@ impl Context {
     }
 
     #[inline]
-    pub async fn take_thumbnail_template(&self) -> PathBuf {
+    pub async fn take_thumbnail_template(&self) -> String {
         self.core
             .lock()
             .await
@@ -147,6 +149,33 @@ impl Context {
         if mem::replace(&mut self.core.lock().await.video_path, Some(vidpath)).is_some() {
             panic!("Vidpath already existed!");
         }
+    }
+
+    #[inline]
+    pub async fn take_video_path(&self) -> PathBuf {
+        self.core
+            .lock()
+            .await
+            .video_path
+            .take()
+            .expect("Video path not yet set")
+    }
+
+    #[inline]
+    pub async fn set_thumbnail_path(&self, thumbpath: PathBuf) {
+        if mem::replace(&mut self.core.lock().await.thumbnail_path, Some(thumbpath)).is_some() {
+            panic!("Thumbpath already existed!");
+        }
+    }
+
+    #[inline]
+    pub async fn take_thumbnail_path(&self) -> PathBuf {
+        self.core
+            .lock()
+            .await
+            .thumbnail_path
+            .take()
+            .expect("Thumbnail path not yet set")
     }
 
     #[inline]

@@ -579,8 +579,8 @@ pub async fn reddit_text_source(
 
     context
         .set_thumbnail(
-            format!("/r/{}: {}", subreddit, &title),
-            Path::new("reddit_text.json").to_path_buf(),
+            format!("/r/{} - {}", subreddit, &title),
+            "reddit_text.json".to_string(),
         )
         .await;
     context
