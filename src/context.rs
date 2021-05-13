@@ -20,7 +20,7 @@ use std::{mem, path::PathBuf};
 use tokio::sync::Mutex;
 
 const VIDEO_WIDTH: usize = 1920;
-const VIDEO_HEIGHT: usize = 108;
+const VIDEO_HEIGHT: usize = 1080;
 
 #[derive(Debug, Default)]
 struct ContextCore {

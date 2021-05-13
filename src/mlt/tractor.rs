@@ -15,7 +15,7 @@
  * along with KOTI.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use super::Filter;
+use super::{Filter, Transition};
 use quick_xml::events::{attributes::Attribute, BytesEnd, BytesStart, Event};
 use std::{
     array::IntoIter as ArrayIter,
@@ -29,6 +29,7 @@ static ID: AtomicUsize = AtomicUsize::new(0);
 pub struct Tractor {
     multitrack: Vec<String>,
     filters: Vec<Filter>,
+    transitions: Vec<Transition>,
     id: String,
 }
 
@@ -38,6 +39,7 @@ impl Tractor {
         Self {
             multitrack: vec![],
             filters: vec![],
+            transitions: vec![],
             id: format!("tractor{}", ID.fetch_add(1, Ordering::SeqCst)),
         }
     }
@@ -58,10 +60,16 @@ impl Tractor {
     }
 
     #[inline]
+    pub fn add_transition(&mut self, trans /* notgull says trans rights */: Transition) {
+        self.transitions.push(trans);
+    }
+
+    #[inline]
     pub fn into_events(self) -> impl Iterator<Item = Event<'static>> {
         let Self {
             multitrack,
             filters,
+            transitions,
             id,
         } = self;
         let opener = BytesStart::borrowed_name(b"tractor").with_attributes(iter::once(Attribute {
@@ -83,6 +91,11 @@ impl Tractor {
             }))
             .chain(iter::once(Event::End(mt_closer)))
             .chain(filters.into_iter().flat_map(|filter| filter.into_events()))
+            .chain(
+                transitions
+                    .into_iter()
+                    .flat_map(|transition| transition.into_events()),
+            )
             .chain(iter::once(Event::End(closer)))
     }
 }

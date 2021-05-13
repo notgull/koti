@@ -201,7 +201,7 @@ impl Comment {
             overlaid: String::new(),
             imagepath: Some(sspath),
             imagefadesin: false,
-            persists_after_tts: 1.5,
+            persists_after_tts: 0.5,
         })
     }
 

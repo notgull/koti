@@ -23,6 +23,7 @@ pub mod mlt;
 pub mod music;
 mod process;
 mod reddit_text_source;
+pub mod text2image;
 mod thumbnail;
 pub mod util;
 mod youtube;
@@ -144,6 +145,14 @@ async fn add_music_track(datadir: PathBuf, name: String, musicpath: PathBuf) -> 
     Ok(())
 }
 
+#[inline]
+async fn draw_text_image(txt: String, path: PathBuf) -> crate::Result {
+    let (img, _, _) =
+        text2image::text_overlay(&txt, 24.0, 800, 600, [255, 255, 255], [0, 0, 0], 4).await?;
+    tokio::task::spawn_blocking(move || img.save(path)).await??;
+    Ok(())
+}
+
 fn main() {
     // sets up the logging framework
     env_logger::init();
@@ -197,6 +206,22 @@ fn main() {
                         ),
                 ),
         )
+        .subcommand(
+            SubCommand::with_name("imagetext")
+                .help("debug feature to debug image text")
+                .arg(
+                    Arg::with_name("path")
+                        .index(1)
+                        .value_name("PATH")
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name("text")
+                        .index(2)
+                        .value_name("TEXT")
+                        .required(true),
+                ),
+        )
         .get_matches();
 
     let datadir: PathBuf = match matches.value_of_os("datadir") {
@@ -223,6 +248,16 @@ fn main() {
 
                     return;
                 }
+            } else if let Some(matches) = matches.subcommand_matches("imagetext") {
+                let path: PathBuf = matches.value_of_os("path").unwrap().into();
+                let text = matches.value_of("text").unwrap().to_string();
+                match tokio::spawn(draw_text_image(text, path)).await {
+                    Ok(Ok(())) => (),
+                    Err(e) => log::error!("Panicked: {:?}", e),
+                    Ok(Err(e)) => log::error!("Unable to draw image: {:?}", e),
+                }
+
+                return;
             }
 
             // try to create a video

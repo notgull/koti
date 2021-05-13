@@ -15,27 +15,32 @@
  * along with KOTI.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+use crate::util::cow_str_into_bytes;
 use quick_xml::events::{attributes::Attribute, BytesEnd, BytesStart, BytesText, Event};
-use std::{array::IntoIter as ArrayIter, collections::HashMap, iter};
+use std::{array::IntoIter as ArrayIter, borrow::Cow, collections::HashMap, iter};
 
 #[derive(Debug, Clone)]
 pub struct Filter {
-    name: String,
-    properties: HashMap<String, String>,
+    name: Cow<'static, str>,
+    properties: HashMap<Cow<'static, str>, Cow<'static, str>>,
 }
 
 impl Filter {
     #[inline]
-    pub fn new(name: String) -> Self {
+    pub fn new<S: Into<Cow<'static, str>>>(name: S) -> Self {
         Self {
-            name,
+            name: name.into(),
             properties: HashMap::new(),
         }
     }
 
     #[inline]
-    pub fn property(mut self, key: String, value: String) -> Self {
-        self.properties.insert(key, value);
+    pub fn property<K: Into<Cow<'static, str>>, V: Into<Cow<'static, str>>>(
+        mut self,
+        key: K,
+        value: V,
+    ) -> Self {
+        self.properties.insert(key.into(), value.into());
         self
     }
 
@@ -61,7 +66,7 @@ impl Filter {
             let propopener =
                 BytesStart::borrowed_name(b"property").with_attributes(iter::once(Attribute {
                     key: b"name",
-                    value: propkey.into_bytes().into(),
+                    value: cow_str_into_bytes(propkey),
                 }));
             let proptext = BytesText::from_escaped_str(propvalue);
             let propcloser = BytesEnd::borrowed(b"property");

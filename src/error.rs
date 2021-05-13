@@ -37,6 +37,7 @@ pub enum Error {
     EspeakError(Option<i32>, Option<String>),
     Hound(hound::Error),
     Xml(XmlError),
+    GlyphOverflow,
 }
 
 impl fmt::Display for Error {
@@ -61,6 +62,7 @@ impl fmt::Display for Error {
             }
             Self::Hound(h) => fmt::Display::fmt(h, f),
             Self::Xml(x) => fmt::Display::fmt(x, f),
+            Self::GlyphOverflow => f.write_str("Glyphs could not fit in bounding box"),
         }
     }
 }

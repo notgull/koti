@@ -17,6 +17,7 @@
 
 use futures_lite::future;
 use std::{
+    borrow::Cow,
     fmt,
     fs::File,
     future::Future,
@@ -168,6 +169,14 @@ pub fn timeout<Fut: Future>(
             Err(crate::Error::Timeout)
         }),
     )
+}
+
+#[inline]
+pub fn cow_str_into_bytes<'a>(cow: Cow<'a, str>) -> Cow<'a, [u8]> {
+    match cow {
+        Cow::Borrowed(s) => Cow::Borrowed(s.as_bytes()),
+        Cow::Owned(s) => Cow::Owned(s.into_bytes()),
+    }
 }
 
 pin_project_lite::pin_project! {

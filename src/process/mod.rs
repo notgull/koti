@@ -17,7 +17,7 @@
 
 use crate::{
     context::Context,
-    mlt::{Filter, PlaylistEntry},
+    mlt::{Filter, PlaylistEntry, Transition},
     util::{ImmediateOrTask, MapFuture},
     Frame,
 };
@@ -32,13 +32,12 @@ use quick_xml::{
 };
 use regex::Regex;
 use std::{
-    array::IntoIter as ArrayIter, io::BufWriter, iter, mem, os::unix::ffi::OsStrExt,
+    array::IntoIter as ArrayIter, io::BufWriter, iter, mem, os::unix::ffi::OsStrExt, path::Path,
     process::Stdio, str::FromStr, sync::Arc,
 };
 use tokio::{fs::File, process::Command};
 
 mod frame;
-pub mod overlay;
 pub mod tts;
 
 pub const FPS: f32 = 29.97;
@@ -134,6 +133,8 @@ pub async fn process<S: Stream<Item = Frame>>(frames: S, ctx: Arc<Context>) -> c
     let (video_width, video_height) = ctx.video_size();
     let mut mlt = crate::mlt::Mlt::new(&basedir, video_width, video_height);
 
+    let blacktrack = mlt.add_producer(Path::new("black").to_path_buf());
+
     // TODO: intro
 
     // map each frame into an mlt action
@@ -167,6 +168,11 @@ pub async fn process<S: Stream<Item = Frame>>(frames: S, ctx: Arc<Context>) -> c
             iter::empty(),
         )
         .to_string();
+
+    // if the total duration is less than a minute, something is wrong
+    if duration < seconds_to_frames(60.0) {
+        return Err(crate::Error::StaticMsg("duration is less than a minute"));
+    }
 
     // by now, we should be done choosing a music entry
     let (musicpath, attr, musicdur) = musictask.await??;
@@ -209,9 +215,10 @@ pub async fn process<S: Stream<Item = Frame>>(frames: S, ctx: Arc<Context>) -> c
 
     // use both as tracks
     let main_tractor = mlt
-        .add_tractor(
-            ArrayIter::new([frame_playlist, /*music_playlist*/]),
+        .add_tractor_with_transitions(
+            ArrayIter::new([/*blacktrack,*/ music_playlist, frame_playlist]),
             iter::empty(),
+            iter::once(Transition::new("mix", "0", "1", 0, duration)),
         )
         .to_string();
 

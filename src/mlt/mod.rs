@@ -19,8 +19,10 @@ mod filter;
 mod playlist;
 mod producer;
 mod tractor;
+mod transition;
 
 pub use filter::Filter;
+pub use transition::Transition;
 
 use crate::process::FPS;
 use playlist::Playlist;
@@ -34,6 +36,7 @@ use std::{
     io::BufWriter,
     iter, mem,
     path::{Path, PathBuf},
+    process::Stdio,
 };
 use tokio::{fs::File, process::Command};
 use tractor::Tractor;
@@ -102,16 +105,34 @@ impl<'a> Mlt<'a> {
         id
     }
 
-    /// Returns the ID
     #[inline]
     pub fn add_tractor<I, J>(&mut self, tracks: I, filters: J) -> String
     where
         I: IntoIterator<Item = String>,
         J: IntoIterator<Item = Filter>,
     {
+        self.add_tractor_with_transitions(tracks, filters, iter::empty())
+    }
+
+    /// Returns the ID
+    #[inline]
+    pub fn add_tractor_with_transitions<I, J, T>(
+        &mut self,
+        tracks: I,
+        filters: J,
+        transitions: T,
+    ) -> String
+    where
+        I: IntoIterator<Item = String>,
+        J: IntoIterator<Item = Filter>,
+        T: IntoIterator<Item = Transition>,
+    {
         let mut tractor = Tractor::new();
         tracks.into_iter().for_each(|t| tractor.add_track(t));
         filters.into_iter().for_each(|f| tractor.add_filter(f));
+        transitions
+            .into_iter()
+            .for_each(|t| tractor.add_transition(t));
 
         let id = tractor.id().to_string();
 
@@ -245,27 +266,11 @@ impl<'a> Mlt<'a> {
         let mut output = Command::new("melt")
             .current_dir(basedir)
             .arg(outpath)
+            //            .stdout(Stdio::inherit())
+            //            .stderr(Stdio::inherit())
             .output()
             .await?;
         log::info!("melt has finished!");
-        match String::from_utf8(mem::take(&mut output.stdout)) {
-            Ok(o) if o.is_empty() => (),
-            Ok(o) => {
-                log::warn!("melt stdout: {}", o);
-            }
-            Err(_) => {
-                log::warn!("melt stdout: <not utf-8>");
-            }
-        }
-        match String::from_utf8(mem::take(&mut output.stderr)) {
-            Ok(e) if e.is_empty() => (),
-            Ok(e) => {
-                log::error!("melt stderr: {}", e);
-            }
-            Err(_) => {
-                log::error!("melt stderr: <not utf8>");
-            }
-        }
 
         if !output.status.success() {
             return Err(crate::Error::StaticMsg("Melt failed"));

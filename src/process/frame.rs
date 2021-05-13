@@ -15,17 +15,26 @@
  * along with KOTI.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use super::{overlay::text_overlay, seconds_to_frames, tts::create_tts};
+use super::{seconds_to_frames, tts::create_tts};
 use crate::{
     context::Context,
     frame::Frame,
     image_size::image_size,
     mlt::{Filter, Mlt, PlaylistEntry},
+    text2image,
     util::{ImmediateOrTask, MapFuture},
 };
 use futures_lite::future;
 use quick_xml::Writer;
-use std::{array::IntoIter as ArrayIter, iter, mem, path::PathBuf, sync::Arc};
+use std::{
+    array::IntoIter as ArrayIter,
+    iter, mem,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 use tokio::process::Command;
 
 #[inline]
@@ -72,8 +81,31 @@ impl ConvertedFrame {
         // text overlay image file
         let text_overlay: ImmediateOrTask<_> = match emptied(overlaid) {
             Some(overlaid) => tokio::spawn(async move {
-                let (t, w, h) = text_overlay(overlaid, &ctx, [255, 255, 255]).await?;
-                crate::Result::Ok(Some((t, w, h)))
+                static TEXT_OVERLAY_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+                let (video_width, video_height) = ctx.video_size();
+                let (t, w, h) = text2image::text_overlay(
+                    &overlaid,
+                    72.0,
+                    video_width as _,
+                    video_height as _,
+                    [255, 255, 255],
+                    [0, 0, 0],
+                    6,
+                )
+                .await?;
+
+                let tpath: PathBuf = ctx.basedir().await.join(format!(
+                    "text_overlay{}.png",
+                    TEXT_OVERLAY_COUNT.fetch_add(1, Ordering::SeqCst)
+                ));
+                let tpath = tokio::task::spawn_blocking(move || {
+                    t.save_with_format(&tpath, image::ImageFormat::Png)?;
+                    crate::Result::Ok(tpath)
+                })
+                .await??;
+
+                crate::Result::Ok(Some((tpath, w, h)))
             })
             .into(),
             None => future::ready(Ok(None)).into(),
@@ -129,7 +161,7 @@ impl ConvertedFrame {
             match (fg_image, text_overlay) {
                 (None, None) => panic!("blank frame?"),
                 (Some((img, w, h)), None) | (None, Some((img, w, h))) => {
-                    self.into_tractor_1_image(mlt, img, w, h)?
+                    self.into_tractor_1_image(mlt, img, w, h, ctx)?
                 }
                 (Some((img1, w1, h1)), Some((img2, w2, h2))) => {
                     self.into_tractor_2_images(mlt, img1, w1, h1, img2, w2, h2, ctx)?
@@ -144,8 +176,9 @@ impl ConvertedFrame {
         mut self,
         mlt: &mut Mlt,
         img: PathBuf,
-        _w: u32,
-        _h: u32,
+        w: u32,
+        h: u32,
+        ctx: &Context,
     ) -> crate::Result<String> {
         // producers:
         //  * the raw image
@@ -154,6 +187,11 @@ impl ConvertedFrame {
         //  * one for each
         // tractor:
         //  * multitrack for each playlist
+        let (video_width, video_height) = ctx.video_size();
+        let (mut vw, mut vh) = (video_width as f32, video_height as f32);
+        vw /= 10.0;
+        vh /= 10.0;
+
         let total_duration = seconds_to_frames(self.duration);
         let audio: Option<PathBuf> = self.tts_audio.map(|(t, _)| t);
 
@@ -169,7 +207,30 @@ impl ConvertedFrame {
                     start: 0,
                     end: total_duration,
                 }),
-                iter::empty(),
+                iter::once(Filter::new("resize")),
+                /*                iter::once({
+                    // use an affine transform to make sure the image fits
+                    let w = w as f32;
+                    let h = h as f32;
+                    let ratio = w / h;
+                    let (w, h) = if ratio > (vw / vh) {
+                        (vw, h * (vh / vw))
+                    } else {
+                        // height is 1080, adjust width to fit
+                        (w * (vw / vh), vh)
+                    };
+                    let (x, y) = ((((2.0*vw) - w)/2.0), ((2.0*vh) - h)/2.0);
+                    let (x, y, w, h) = (x as u32, y as u32, w as u32, h as u32);
+
+                    Filter::new("affine".to_string())
+                        .property("background".to_string(), "colour:0".to_string())
+                        .property(
+                            "transition.geometry".to_string(),
+                            format!("0={} {} {} {}", x, y, w, h),
+                        )
+                        .property("transition.distort".to_string(), "0".to_string())
+                }),*/
+                //iter::empty(),
             )
             .to_string();
         let playlist2 = producer2.map(|producer2| {
@@ -179,7 +240,11 @@ impl ConvertedFrame {
                     start: 0,
                     end: total_duration,
                 }),
-                iter::empty(),
+                //                iter::empty(),
+                iter::once(
+                    Filter::new("panner".to_string())
+                        .property("start".to_string(), "0.5".to_string()),
+                ),
             )
             .to_string()
         });
