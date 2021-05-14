@@ -20,7 +20,7 @@ mod config;
 use crate::context::Context;
 use config::YtConfig;
 use google_youtube3::{
-    api::{Video, VideoSnippet},
+    api::{Video, VideoSnippet, VideoStatus},
     YouTube,
 };
 use std::path::PathBuf;
@@ -47,13 +47,13 @@ pub async fn upload_video(
     let secret = yup_oauth2::ApplicationSecret {
         client_id,
         client_secret,
-        token_uri: "https://www.googleapis.com/auth/youtube.upload".to_string(),
-        auth_uri: "https://www.googleapis.com/auth/youtube.upload".to_string(),
+        token_uri: "https://accounts.google.com/o/oauth2/token".to_string(),
+        auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
         ..Default::default()
     };
-    let auth = yup_oauth2::DeviceFlowAuthenticator::builder(
+    let auth = yup_oauth2::InstalledFlowAuthenticator::builder(
         secret,
-//        yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+        yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
     )
     .persist_tokens_to_disk("tokencache.json")
     .build()
@@ -74,15 +74,33 @@ pub async fn upload_video(
         description: Some(video_desc),
         ..Default::default()
     });
+    req.status = Some(VideoStatus {
+        privacy_status: Some("public".to_string()),
+        ..Default::default()
+    });
 
-    yt.videos()
+    let (_, video) = yt
+        .videos()
         .insert(req)
-        .upload(
+        .upload_resumable(
             File::open(video_path).await?.into_std().await,
             "video/webm".parse().unwrap(),
         )
         .await
         .expect("Failed to upload to YouTube");
+
+    log::debug!("Video is: {:?}", &video);
+
+    // upload the thumbnail
+    log::info!("Video has been uploaded, uploading thumbnail...");
+    yt.thumbnails()
+        .set(video.id.expect("Video has no id?").as_str())
+        .upload_resumable(
+            File::open(thumbnail_path).await?.into_std().await,
+            "image/png".parse().unwrap(),
+        )
+        .await
+        .expect("Failed to set thumbnail for video");
 
     log::info!("Should now be uploaded and processing on YouTube!");
     Ok(())

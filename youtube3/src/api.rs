@@ -28836,6 +28836,7 @@ impl<'a> VideoInsertCall<'a> {
     
                             let mut body_reader_bytes = vec![];
                             body_reader.read_to_end(&mut body_reader_bytes).unwrap();
+//                            log::info!("Body_reader_bytes are: {:?}", std::str::from_utf8(&body_reader_bytes));
                             let request = req_builder
                             .header(content_type.0, content_type.1.to_string())
                             .body(hyper::body::Body::from(body_reader_bytes));
@@ -28857,6 +28858,7 @@ impl<'a> VideoInsertCall<'a> {
                 Ok(mut res) => {
                     if !res.status().is_success() {
                         let res_body_string = client::get_body_as_string(res.body_mut()).await;
+                        log::info!("Got res body string as: {}", &res_body_string);
 
                         let json_server_error = json::from_str::<client::JsonServerError>(&res_body_string).ok();
                         let server_error = json::from_str::<client::ServerError>(&res_body_string)

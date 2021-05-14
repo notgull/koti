@@ -491,6 +491,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "itertools",
+ "log 0.4.14",
  "mime 0.2.6",
  "serde",
  "serde_derive",
