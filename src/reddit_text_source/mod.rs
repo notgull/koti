@@ -580,7 +580,7 @@ pub async fn reddit_text_source(
     context
         .set_thumbnail(
             format!("/r/{} - {}", subreddit, &title),
-            "reddit_text.json".to_string(),
+            "reddit_text".to_string(),
         )
         .await;
     context

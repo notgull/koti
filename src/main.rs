@@ -112,12 +112,14 @@ async fn create_video(homedir: PathBuf, datadir: PathBuf) -> crate::Result {
     let t1 = tokio::spawn(async move { frame_source(ctx_clone).await });
     let t2 = tokio::spawn(async move {
         let ctx = ctx_clone2;
-        thumbnail::create_thumbnail(ctx).await
+        thumbnail::create_thumbnail(ctx)
+            .await
+            .expect("thumbnail failed")
     });
 
     let (t1, t2) = futures_lite::future::zip(t1, t2).await;
     t1??;
-    t2??;
+    t2?/*?*/;
 
     // now that we have a video and a thumbnail, upload to YouTube
     youtube::upload_to_youtube(&ctx).await
@@ -278,12 +280,37 @@ fn main() {
             SubCommand::with_name("ytoken")
                 .about("Set the YouTube API token")
                 .arg(
-                    Arg::with_name("token")
+                    Arg::with_name("id")
                         .index(1)
-                        .value_name("TOKEN")
+                        .value_name("CLIENT_ID")
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name("secret")
+                        .index(2)
+                        .value_name("CLIENT_SECRET")
                         .required(true),
                 ),
         )
+        .subcommands({
+            if cfg!(debug_assertions) {
+                vec![SubCommand::with_name("ytupload")
+                    .arg(
+                        Arg::with_name("vidpath")
+                            .index(1)
+                            .value_name("VIDPATH")
+                            .required(true),
+                    )
+                    .arg(
+                        Arg::with_name("thumbpath")
+                            .index(2)
+                            .value_name("THUMBPATH")
+                            .required(true),
+                    )]
+            } else {
+                vec![]
+            }
+        })
         .get_matches();
 
     let datadir: PathBuf = match matches.value_of_os("datadir") {
@@ -297,6 +324,8 @@ fn main() {
         .build()
         .expect("Unable to construct Tokio runtime")
         .block_on(async move {
+            let local = tokio::task::LocalSet::new();
+
             // add a music track if need be
             if let Some(matches) = matches.subcommand_matches("music") {
                 if let Some(matches) = matches.subcommand_matches("add") {
@@ -338,7 +367,8 @@ fn main() {
 
                 return;
             } else if let Some(matches) = matches.subcommand_matches("ytoken") {
-                let token = matches.value_of("token").unwrap().to_string();
+                let id = matches.value_of("id").unwrap().to_string();
+                let secret = matches.value_of("secret").unwrap().to_string();
                 let mut ctx = context::Context::default();
                 tokio::fs::create_dir_all(&datadir)
                     .await
@@ -347,7 +377,7 @@ fn main() {
 
                 match tokio::spawn(async move {
                     let ctx = ctx;
-                    youtube::set_token(&ctx, token).await
+                    youtube::set_token(&ctx, id, secret).await
                 })
                 .await
                 {
@@ -357,21 +387,55 @@ fn main() {
                 }
 
                 return;
+            } else if let Some(matches) = matches.subcommand_matches("ytupload") {
+                let vidpath: PathBuf = matches.value_of_os("vidpath").unwrap().into();
+                let thumbpath: PathBuf = matches.value_of_os("thumbpath").unwrap().into();
+                let ctx = context::Context::default();
+                tokio::fs::create_dir_all(&datadir)
+                    .await
+                    .expect("Can't create dirs?");
+                ctx.set_datadir(datadir).await;
+
+                local
+                    .run_until(async move {
+                        let ctx = Box::leak::<'static>(Box::new(ctx));
+
+                        match tokio::task::spawn_local(youtube::upload_video(
+                            ctx,
+                            vidpath,
+                            thumbpath,
+                            "Test".to_string(),
+                            "Test".to_string(),
+                        ))
+                        .await
+                        {
+                            Ok(Ok(())) => (),
+                            Err(e) => log::error!("Panicked: {:?}", e),
+                            Ok(Err(e)) => log::error!("Unable to upload video: {:?}", e),
+                        }
+                    })
+                    .await;
+
+                return;
             }
 
             // try to create a video
-            loop {
-                match tokio::spawn(create_video(path, datadir)).await {
-                    Ok(Ok(())) => break,
-                    Err(e) => {
-                        log::error!("Panick error: {:?}", e);
-                        break;
+            local
+                .run_until(async move {
+                    loop {
+                        match tokio::task::spawn_local(create_video(path, datadir)).await {
+                            Ok(Ok(())) => break,
+                            Err(e) => {
+                                log::error!("Panick error: {:?}", e);
+                                break;
+                            }
+                            Ok(Err(e)) => {
+                                log::error!("A fatal error occurred: {:?}", e);
+                                break;
+                            }
+                        }
                     }
-                    Ok(Err(e)) => {
-                        log::error!("A fatal error occurred: {:?}", e);
-                        break;
-                    }
-                }
-            }
+                })
+                .await;
         });
 }

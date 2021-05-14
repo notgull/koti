@@ -17,5 +17,6 @@
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct YtConfig {
-    pub token: String,
+    pub client_id: String,
+    pub client_secret: String,
 }

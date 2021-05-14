@@ -188,4 +188,9 @@ impl Context {
     pub async fn append_to_description(&self, desc: String) {
         self.core.lock().await.video_description.push_str(&desc);
     }
+
+    #[inline]
+    pub async fn take_video_description(&self) -> String {
+        mem::take(&mut self.core.lock().await.video_description)
+    }
 }

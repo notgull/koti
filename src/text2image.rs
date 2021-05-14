@@ -24,8 +24,8 @@ use tokio::{
     sync::OnceCell,
 };
 
-const TEXT_MARGIN: f32 = 0.8333333333333334; // 20/24
-const IMAGE_MARGIN: f32 = 1.6666666666666667; // 40/24
+const TEXT_MARGIN: f32 = 0.7;
+const IMAGE_MARGIN: f32 = 1.6;
 
 static FONT: OnceCell<Font<'static>> = OnceCell::const_new();
 
@@ -112,7 +112,7 @@ fn word_glyphs(
             // figure out whether we'll go over the line with
             let (word_x, word_y) = if word_width + *x > max_image_width as f32 {
                 *x = word_width;
-                *y += v_metrics.line_gap;
+                *y += v_metrics.line_gap + v_metrics.ascent;
                 if *y > max_image_height {
                     overflow = true;
                     return None;
@@ -209,11 +209,16 @@ pub async fn text_overlay(
             .first()
             .map(|g| g.pixel_bounding_box().expect("No min in bounding box?").min)
             .expect("Empty string?");
-        let max = glyphs
+        let bottommost = glyphs
             .last()
             .map(|g| g.pixel_bounding_box().expect("No max in bounding box?").max)
             .expect("Empty string?");
-        (max.x - min.x, max.y - min.y)
+        let leftmost = glyphs
+            .iter()
+            .filter_map(|g| g.pixel_bounding_box().map(|p| p.max))
+            .max_by(|m1, m2| m1.x.cmp(&m2.x))
+            .expect("Empty string?");
+        (leftmost.x - min.x, bottommost.y - min.y)
     };
 
     let (text_width, text_height) = (text_width as u32, text_height as u32);

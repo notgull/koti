@@ -19,6 +19,10 @@ mod config;
 
 use crate::context::Context;
 use config::YtConfig;
+use google_youtube3::{
+    api::{Video, VideoSnippet},
+    YouTube,
+};
 use std::path::PathBuf;
 use tokio::{
     fs::File,
@@ -26,25 +30,84 @@ use tokio::{
 };
 
 #[inline]
+pub async fn upload_video(
+    ctx: &Context,
+    video_path: PathBuf,
+    thumbnail_path: PathBuf,
+    video_title: String,
+    video_desc: String,
+) -> crate::Result {
+    let config = load_config(ctx).await?;
+    let YtConfig {
+        client_id,
+        client_secret,
+    } = config;
+
+    // create the oauth authorization
+    let secret = yup_oauth2::ApplicationSecret {
+        client_id,
+        client_secret,
+        token_uri: "https://www.googleapis.com/auth/youtube.upload".to_string(),
+        auth_uri: "https://www.googleapis.com/auth/youtube.upload".to_string(),
+        ..Default::default()
+    };
+    let auth = yup_oauth2::DeviceFlowAuthenticator::builder(
+        secret,
+//        yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+    )
+    .persist_tokens_to_disk("tokencache.json")
+    .build()
+    .await?;
+
+    log::info!("Acquired the authentication token for YouTube");
+
+    // open up the YouTube API
+    let mut yt = YouTube::new(
+        hyper::Client::builder().build(hyper_rustls::HttpsConnector::with_native_roots()),
+        auth,
+    );
+
+    // upload the video
+    let mut req = Video::default();
+    req.snippet = Some(VideoSnippet {
+        title: Some(video_title),
+        description: Some(video_desc),
+        ..Default::default()
+    });
+
+    yt.videos()
+        .insert(req)
+        .upload(
+            File::open(video_path).await?.into_std().await,
+            "video/webm".parse().unwrap(),
+        )
+        .await
+        .expect("Failed to upload to YouTube");
+
+    log::info!("Should now be uploaded and processing on YouTube!");
+    Ok(())
+}
+
+#[inline]
 pub async fn upload_to_youtube(ctx: &Context) -> crate::Result {
     let video_path = ctx.take_video_path().await;
     let thumbnail_path = ctx.take_thumbnail_path().await;
+    let video_title = ctx.take_video_title().await;
+    let video_desc = ctx.take_video_description().await;
     log::info!(
         "Video path is {:?}, thumbnail path is {:?}",
         &video_path,
         &thumbnail_path
     );
 
-    let config = load_config(ctx).await?;
-
-    log::error!("TODO: upload to youtube");
-    Ok(())
+    upload_video(ctx, video_path, thumbnail_path, video_title, video_desc).await
 }
 
 #[inline]
-pub async fn set_token(ctx: &Context, token: String) -> crate::Result {
+pub async fn set_token(ctx: &Context, cid: String, cs: String) -> crate::Result {
     let mut cfg = load_config(ctx).await.unwrap_or(Default::default());
-    cfg.token = token;
+    cfg.client_id = cid;
+    cfg.client_secret = cs;
     save_config(ctx, cfg).await
 }
 
