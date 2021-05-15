@@ -38,6 +38,7 @@ pub enum Error {
     Hound(hound::Error),
     Xml(XmlError),
     GlyphOverflow,
+    DisallowedWord,
 }
 
 impl fmt::Display for Error {
@@ -63,6 +64,7 @@ impl fmt::Display for Error {
             Self::Hound(h) => fmt::Display::fmt(h, f),
             Self::Xml(x) => fmt::Display::fmt(x, f),
             Self::GlyphOverflow => f.write_str("Glyphs could not fit in bounding box"),
+            Self::DisallowedWord => f.write_str("Found a word that isn't allowed to be used"),
         }
     }
 }

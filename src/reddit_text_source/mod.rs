@@ -17,6 +17,7 @@
 
 use crate::{
     context::Context,
+    filter::{filter_pass, filter_text},
     frame::Frame,
     util::{self, timeout, ArcWebElement},
 };
@@ -171,18 +172,20 @@ impl Comment {
     #[inline]
     async fn text(&self) -> crate::Result<String> {
         log::info!("Getting comment text");
-        Ok(stream::iter(
-            self.commentbody
-                .elem()
-                .find_elements(By::Tag("p"))
-                .await?
-                .into_iter()
-                .skip(1usize),
+        filter_pass(
+            stream::iter(
+                self.commentbody
+                    .elem()
+                    .find_elements(By::Tag("p"))
+                    .await?
+                    .into_iter()
+                    .skip(1usize),
+            )
+            .then(|e| async move { e.inner_html().await })
+            .filter_map(util::ok_log)
+            .collect::<String>()
+            .await,
         )
-        .then(|e| async move { e.inner_html().await })
-        .filter_map(util::ok_log)
-        .collect::<String>()
-        .await)
     }
 
     #[inline]
@@ -446,13 +449,14 @@ impl ThreadHeader {
 
     #[inline]
     async fn text(&self) -> crate::Result<String> {
-        Ok(self
-            .elem
-            .elem()
-            .find_element(By::Tag("a"))
-            .await?
-            .text()
-            .await?)
+        filter_pass(
+            self.elem
+                .elem()
+                .find_element(By::Tag("a"))
+                .await?
+                .text()
+                .await?,
+        )
     }
 
     #[inline]
@@ -520,7 +524,7 @@ impl RedditThread {
                     .await
                     .unwrap();
                 Frame {
-                    tts: iteme.inner_html().await.unwrap(),
+                    tts: filter_pass(iteme.inner_html().await.unwrap()).unwrap(),
                     overlaid: String::new(),
                     imagepath: Some(parscreename),
                     imagefadesin: false,

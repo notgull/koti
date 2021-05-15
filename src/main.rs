@@ -17,6 +17,7 @@
 
 pub mod context;
 mod error;
+pub mod filter;
 pub mod frame;
 pub mod image_size;
 pub mod mlt;
