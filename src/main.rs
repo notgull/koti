@@ -76,7 +76,7 @@ const FRAME_SOURCES: &[fn(
     &[reddit_text_source!("AskReddit", 500, 200, 100, "day")];
 
 #[inline]
-async fn create_video(homedir: PathBuf, datadir: PathBuf) -> crate::Result {
+async fn create_video(homedir: PathBuf, datadir: PathBuf, upload: bool) -> crate::Result {
     // create the context
     let ctx = Arc::new(context::Context::default());
 
@@ -98,7 +98,7 @@ async fn create_video(homedir: PathBuf, datadir: PathBuf) -> crate::Result {
         #[inline]
         fn drop(&mut self) {
             let ctx = self.0.clone();
-            //tokio::spawn(async move { tokio::fs::remove_dir_all(ctx.basedir().await).await });
+            tokio::spawn(async move { tokio::fs::remove_dir_all(ctx.basedir().await).await });
         }
     }
 
@@ -113,17 +113,26 @@ async fn create_video(homedir: PathBuf, datadir: PathBuf) -> crate::Result {
     let t1 = tokio::spawn(async move { frame_source(ctx_clone).await });
     let t2 = tokio::spawn(async move {
         let ctx = ctx_clone2;
-        thumbnail::create_thumbnail(ctx)
-            .await
-            .expect("thumbnail failed")
+        thumbnail::create_thumbnail(ctx).await
     });
 
     let (t1, t2) = futures_lite::future::zip(t1, t2).await;
     t1??;
-    t2?/*?*/;
+    t2??;
 
     // now that we have a video and a thumbnail, upload to YouTube
-    youtube::upload_to_youtube(&ctx).await
+    if upload {
+        youtube::upload_to_youtube(&ctx).await
+    } else {
+        let viddir = dirs::video_dir().unwrap();
+        let vidpath = viddir.join(format!("koti{}.webm", basedirname));
+        tokio::fs::rename(ctx.take_video_path().await, &vidpath).await?;
+        log::info!("Moved video to {:?}", &vidpath);
+        let thumbpath = viddir.join(format!("koti{}.png", basedirname));
+        tokio::fs::rename(ctx.take_thumbnail_path().await, &thumbpath).await?;
+        log::info!("Moved thumbnail to {:?}", &thumbpath);
+        Ok(())
+    }
 }
 
 #[inline]
@@ -208,6 +217,13 @@ fn main() {
                 .value_name("FILE")
                 .help("Sets the directory that contains KOTI's information")
                 .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("upload")
+                .short("u")
+                .long("upload")
+                .takes_value(false)
+                .help("Upload to youtube?"),
         )
         .subcommand(
             SubCommand::with_name("music")
@@ -424,7 +440,13 @@ fn main() {
             local
                 .run_until(async move {
                     loop {
-                        match tokio::task::spawn_local(create_video(path, datadir)).await {
+                        match tokio::task::spawn_local(create_video(
+                            path,
+                            datadir,
+                            matches.is_present("upload"),
+                        ))
+                        .await
+                        {
                             Ok(Ok(())) => break,
                             Err(e) => {
                                 log::error!("Panick error: {:?}", e);
