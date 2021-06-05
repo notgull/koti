@@ -22,6 +22,11 @@ use tokio::sync::Mutex;
 const VIDEO_WIDTH: usize = 1920;
 const VIDEO_HEIGHT: usize = 1080;
 
+const DEFAULT_STRING: &str =
+    "Subscribe to King of the Internet! https://www.youtube.com/channel/UCMk4074NTvhjdFksS8MflMA
+Subscribe to my main channel! https://www.youtube.com/channel/UCa22ge_MKVapVkX8lN1jDuQ
+";
+
 #[derive(Debug, Default)]
 struct ContextCore {
     thumbnail_template: Option<String>,

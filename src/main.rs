@@ -24,6 +24,7 @@ pub mod mlt;
 pub mod music;
 mod process;
 mod reddit_text_source;
+mod scp;
 pub mod text2image;
 mod thumbnail;
 pub mod util;
@@ -41,6 +42,7 @@ use std::{
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
+    process::exit,
     str::FromStr,
     sync::Arc,
 };
@@ -72,8 +74,12 @@ macro_rules! reddit_text_source {
 
 const FRAME_SOURCES: &[fn(
     Arc<Context>,
-) -> Pin<Box<dyn Future<Output = crate::Result> + Send + 'static>>] =
-    &[reddit_text_source!("AskReddit", 500, 200, 100, "day")];
+) -> Pin<Box<dyn Future<Output = crate::Result> + Send + 'static>>] = &[
+    reddit_text_source!("AskReddit", 500, 200, 100, "day"),
+    reddit_text_source!("TalesFromTechSupport", 500, 100, 100, "week"),
+    reddit_text_source!("StoresAboutKevin", 250, 50, 50, "week"),
+    reddit_text_source!("NoSleep", 750, 200, 100, "week"),
+];
 
 #[inline]
 async fn create_video(homedir: PathBuf, datadir: PathBuf, upload: bool) -> crate::Result {
@@ -433,10 +439,10 @@ fn main() {
             // try to create a video
             local
                 .run_until(async move {
-                    loop {
+                    for i in 0..10 {
                         match tokio::task::spawn_local(create_video(
-                            path,
-                            datadir,
+                            path.clone(),
+                            datadir.clone(),
                             !matches.is_present("no-upload"),
                         ))
                         .await
@@ -448,7 +454,16 @@ fn main() {
                             }
                             Ok(Err(e)) => {
                                 log::error!("A fatal error occurred: {:?}", e);
-                                break;
+                                match i {
+                                    i @ 9 => {
+                                        log::error!(
+                                            "Tried to run program {} times and failed; stopping...",
+                                            i
+                                        );
+                                        exit(1);
+                                    }
+                                    i => log::error!("Retrying for the {}nth time", i + 1),
+                                }
                             }
                         }
                     }

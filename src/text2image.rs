@@ -111,7 +111,7 @@ fn word_glyphs(
 
             // figure out whether we'll go over the line with
             let (word_x, word_y) = if word_width + *x > max_image_width as f32 {
-                *x = word_width;
+                *x = word_width + space_width;
                 *y += v_metrics.line_gap + v_metrics.ascent;
                 if *y > max_image_height {
                     overflow = true;

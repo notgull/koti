@@ -96,9 +96,13 @@ pub async fn process<S: Stream<Item = Frame>>(frames: S, ctx: Arc<Context>) -> c
     // get the intro track, if we have it
     let intro_path = datadir.join("intro.mkv");
     let intro_frame = match fs::metadata(&intro_path).await {
-        Err(_) => { log::error!("Did not find an intro frame"); None },
+        Err(_) => {
+            log::error!("Did not find an intro frame");
+            None
+        }
         Ok(_) => {
             let total = (video_length(&intro_path).await? * FPS) as usize;
+            duration += total;
             let intro_producer = mlt.add_producer(intro_path);
             Some((intro_producer, total))
         }
@@ -107,9 +111,13 @@ pub async fn process<S: Stream<Item = Frame>>(frames: S, ctx: Arc<Context>) -> c
     // get the outro track, if we have it
     let outro_path = datadir.join("outro.mkv");
     let outro_frame = match fs::metadata(&outro_path).await {
-        Err(_) => { log::error!("Did not find an outro frame"); None },
+        Err(_) => {
+            log::error!("Did not find an outro frame");
+            None
+        }
         Ok(_) => {
             let total = (video_length(&outro_path).await? * FPS) as usize;
+            duration += toal;
             let outro_producer = mlt.add_producer(outro_path);
             Some((outro_producer, total))
         }

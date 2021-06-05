@@ -34,7 +34,7 @@ pub async fn upload_video(
     ctx: &Context,
     video_path: PathBuf,
     thumbnail_path: PathBuf,
-    video_title: String,
+    mut video_title: String,
     video_desc: String,
 ) -> crate::Result {
     let config = load_config(ctx).await?;
@@ -42,6 +42,13 @@ pub async fn upload_video(
         client_id,
         client_secret,
     } = config;
+
+    // sanitize the title
+    let video_title: String = video_title.chars().filter(|c| c.is_ascii()).collect();
+    log::info!("Video title: {}", &video_title);
+    if video_title.is_empty() {
+        return Err(crate::Error::StaticMsg("Video title was empty!"));
+    }
 
     // create the oauth authorization
     let secret = yup_oauth2::ApplicationSecret {
