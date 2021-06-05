@@ -92,17 +92,9 @@ async fn create_video(homedir: PathBuf, datadir: PathBuf, upload: bool) -> crate
     ctx.set_datadir(datadir).await;
 
     // create a guard that deletes the base directory on exit
-    struct DeleteTheBasedirOnExit(Arc<Context>);
+    //    struct DeleteTheBasedirOnExit(Arc<Context>);
 
-    impl Drop for DeleteTheBasedirOnExit {
-        #[inline]
-        fn drop(&mut self) {
-            let ctx = self.0.clone();
-            tokio::spawn(async move { tokio::fs::remove_dir_all(ctx.basedir().await).await });
-        }
-    }
-
-    let _guard = DeleteTheBasedirOnExit(ctx.clone());
+    //    let _guard = DeleteTheBasedirOnExit(ctx.clone());
 
     // select a random element from the array
     let frame_source = FRAME_SOURCES[tls_rng().generate_range::<usize>(0, FRAME_SOURCES.len())];
@@ -122,7 +114,7 @@ async fn create_video(homedir: PathBuf, datadir: PathBuf, upload: bool) -> crate
 
     // now that we have a video and a thumbnail, upload to YouTube
     if upload {
-        youtube::upload_to_youtube(&ctx).await
+        youtube::upload_to_youtube(&ctx).await?
     } else {
         let viddir = dirs::video_dir().unwrap();
         let vidpath = viddir.join(format!("koti{}.webm", basedirname));
@@ -131,8 +123,11 @@ async fn create_video(homedir: PathBuf, datadir: PathBuf, upload: bool) -> crate
         let thumbpath = viddir.join(format!("koti{}.png", basedirname));
         tokio::fs::rename(ctx.take_thumbnail_path().await, &thumbpath).await?;
         log::info!("Moved thumbnail to {:?}", &thumbpath);
-        Ok(())
     }
+
+    tokio::fs::remove_dir_all(ctx.basedir().await).await?;
+
+    Ok(())
 }
 
 #[inline]
@@ -219,9 +214,8 @@ fn main() {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("upload")
-                .short("u")
-                .long("upload")
+            Arg::with_name("no-upload")
+                .long("no-upload")
                 .takes_value(false)
                 .help("Upload to youtube?"),
         )
@@ -443,7 +437,7 @@ fn main() {
                         match tokio::task::spawn_local(create_video(
                             path,
                             datadir,
-                            matches.is_present("upload"),
+                            !matches.is_present("no-upload"),
                         ))
                         .await
                         {

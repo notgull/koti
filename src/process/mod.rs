@@ -18,7 +18,7 @@
 use crate::{
     context::Context,
     mlt::{Filter, PlaylistEntry, Transition},
-    util::{ImmediateOrTask, MapFuture},
+    util::{video_length, ImmediateOrTask, MapFuture},
     Frame,
 };
 use futures_lite::{
@@ -35,7 +35,10 @@ use std::{
     array::IntoIter as ArrayIter, io::BufWriter, iter, mem, os::unix::ffi::OsStrExt, path::Path,
     process::Stdio, str::FromStr, sync::Arc,
 };
-use tokio::{fs::File, process::Command};
+use tokio::{
+    fs::{self, File},
+    process::Command,
+};
 
 mod frame;
 pub mod tts;
@@ -56,61 +59,16 @@ macro_rules! s {
 #[inline]
 pub async fn process<S: Stream<Item = Frame>>(frames: S, ctx: Arc<Context>) -> crate::Result {
     let basedir = ctx.basedir().await;
+    let datadir = ctx.datadir().await;
 
     // launch an alternate task to choose a piece of music
     let ctx_clone = ctx.clone();
     let musictask = tokio::spawn(async move {
-        static DURATION_REGEX: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"Duration: (\d\d):(\d\d):(\d\d).(\d\d)").expect("Regex failed to compile")
-        });
-
         let music = crate::music::Music::load(&ctx_clone).await?;
         let (path, attr) = music.random_track();
+        let total = video_length(path).await?;
 
-        // figure out the length of the sound file using ffmpeg
-        let mut c = Command::new("ffmpeg")
-            .arg("-i")
-            .arg(path)
-            .stderr(Stdio::piped())
-            .stdout(Stdio::piped())
-            .output()
-            .await?;
-
-        // it is supposed to fail
-
-        let mut textout =
-            String::from_utf8(mem::take(&mut c.stdout)).expect("ffmpeg output isn't utf-8?");
-        textout.extend(iter::once(
-            String::from_utf8(c.stderr).expect("ffmpeg stderr isn't utf-8?"),
-        ));
-        let total: f32 = match DURATION_REGEX.captures(&textout) {
-            Some(caps) => caps
-                .iter()
-                .skip(1)
-                .map(|cap| match cap {
-                    Some(cap) => usize::from_str(cap.as_str()).expect("Not really an f64?") as f32,
-                    None => panic!("Should've participated?"),
-                })
-                .enumerate()
-                .fold(0.0, |sum, (index, value)| {
-                    let multiplier: f32 = match index {
-                        0 => 360.0,
-                        1 => 60.0,
-                        2 => 1.0,
-                        3 => 0.01,
-                        _ => panic!("More than four captures?"),
-                    };
-
-                    sum + (value * multiplier)
-                }),
-            None => {
-                return Err(crate::Error::StaticMsg(
-                    "Could not find duration with regex",
-                ))
-            }
-        };
-
-        Ok((path.to_path_buf(), attr.to_string(), total))
+        crate::Result::Ok((path.to_path_buf(), attr.to_string(), total))
     });
 
     // collect all of the frames into a vector of tasks that are turning those frames into real stuff
@@ -135,25 +93,45 @@ pub async fn process<S: Stream<Item = Frame>>(frames: S, ctx: Arc<Context>) -> c
 
     let blacktrack = mlt.add_producer(Path::new("black").to_path_buf());
 
-    // TODO: intro
+    // get the intro track, if we have it
+    let intro_path = datadir.join("intro.mkv");
+    let intro_frame = match fs::metadata(&intro_path).await {
+        Err(_) => { log::error!("Did not find an intro frame"); None },
+        Ok(_) => {
+            let total = (video_length(&intro_path).await? * FPS) as usize;
+            let intro_producer = mlt.add_producer(intro_path);
+            Some((intro_producer, total))
+        }
+    };
+
+    // get the outro track, if we have it
+    let outro_path = datadir.join("outro.mkv");
+    let outro_frame = match fs::metadata(&outro_path).await {
+        Err(_) => { log::error!("Did not find an outro frame"); None },
+        Ok(_) => {
+            let total = (video_length(&outro_path).await? * FPS) as usize;
+            let outro_producer = mlt.add_producer(outro_path);
+            Some((outro_producer, total))
+        }
+    };
 
     // map each frame into an mlt action
     log::info!("Resolving all of the converted frames from their tasks...");
-    let frame_tractors: Vec<(String, usize)> = frames
-        .map(|frame| match frame {
-            Ok(frame) => match frame.into_tractor(&mut mlt, &ctx) {
-                Ok((tractor, dur)) => {
-                    duration += dur;
-                    Ok((tractor, dur))
-                }
+    let frame_tractors: Vec<(String, usize)> =
+        stream::iter(intro_frame.into_iter().map(Result::Ok))
+            .chain(frames.map(|frame| match frame {
+                Ok(frame) => match frame.into_tractor(&mut mlt, &ctx) {
+                    Ok((tractor, dur)) => {
+                        duration += dur;
+                        Ok((tractor, dur))
+                    }
+                    Err(e) => Err(e),
+                },
                 Err(e) => Err(e),
-            },
-            Err(e) => Err(e),
-        })
-        .try_collect()
-        .await?;
-
-    // TODO: outro
+            }))
+            .chain(stream::iter(outro_frame.into_iter().map(Result::Ok)))
+            .try_collect()
+            .await?;
 
     // combine the tractors into a single playlist
     let frame_playlist = mlt

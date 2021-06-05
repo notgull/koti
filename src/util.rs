@@ -16,15 +16,19 @@
  */
 
 use futures_lite::future;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::{
     borrow::Cow,
     fmt,
     fs::File,
     future::Future,
     io::{prelude::*, BufReader, BufWriter},
-    mem,
+    iter, mem,
     path::Path,
     pin::Pin,
+    process::Stdio,
+    str::FromStr,
     sync::Arc,
     task::{Context, Poll},
     time::Duration,
@@ -33,7 +37,7 @@ use thirtyfour::{
     common::types::{ElementId, ElementRect},
     prelude::*,
 };
-use tokio::task::JoinError;
+use tokio::{process::Command, task::JoinError};
 
 #[inline]
 pub async fn cropped_screenshot(
@@ -235,4 +239,56 @@ fn test_timeout() {
                 .await
                 .is_err());
         });
+}
+
+#[inline]
+pub async fn video_length(path: &Path) -> crate::Result<f32> {
+    static DURATION_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"Duration: (\d\d):(\d\d):(\d\d).(\d\d)").expect("Regex failed to compile")
+    });
+
+    // figure out the length of the sound file using ffmpeg
+    let mut c = Command::new("ffmpeg")
+        .arg("-i")
+        .arg(path)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .output()
+        .await?;
+
+    // it is supposed to fail
+
+    let mut textout =
+        String::from_utf8(mem::take(&mut c.stdout)).expect("ffmpeg output isn't utf-8?");
+    textout.extend(iter::once(
+        String::from_utf8(c.stderr).expect("ffmpeg stderr isn't utf-8?"),
+    ));
+    let total: f32 = match DURATION_REGEX.captures(&textout) {
+        Some(caps) => caps
+            .iter()
+            .skip(1)
+            .map(|cap| match cap {
+                Some(cap) => usize::from_str(cap.as_str()).expect("Not really an f64?") as f32,
+                None => panic!("Should've participated?"),
+            })
+            .enumerate()
+            .fold(0.0, |sum, (index, value)| {
+                let multiplier: f32 = match index {
+                    0 => 360.0,
+                    1 => 60.0,
+                    2 => 1.0,
+                    3 => 0.01,
+                    _ => panic!("More than four captures?"),
+                };
+
+                sum + (value * multiplier)
+            }),
+        None => {
+            return Err(crate::Error::StaticMsg(
+                "Could not find duration with regex",
+            ))
+        }
+    };
+
+    Ok(total)
 }
