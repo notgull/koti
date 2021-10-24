@@ -117,7 +117,7 @@ pub async fn process<S: Stream<Item = Frame>>(frames: S, ctx: Arc<Context>) -> c
         }
         Ok(_) => {
             let total = (video_length(&outro_path).await? * FPS) as usize;
-            duration += toal;
+            duration += total;
             let outro_producer = mlt.add_producer(outro_path);
             Some((outro_producer, total))
         }

@@ -19,7 +19,7 @@ use crate::{
     context::Context,
     filter::{filter_pass, filter_text},
     frame::Frame,
-    util::{self, timeout, ArcWebElement},
+    util::{self, strip_html_tags, timeout, ArcWebElement},
 };
 use futures_lite::{
     future,
@@ -231,18 +231,6 @@ impl Comment {
 
         // get the children out of it
         let childs = direct_children(html);
-        /*let eclone = self.elem.clone();
-        let childs = stream::iter(childs)
-            .then(move |child_id| eclone.clone().elem().find_element(By::Id(&child_id)))
-            .filter_map(util::ok_log)
-            .map(move |elem| {
-                (
-                    ArcWebElement::new(driver_clone.clone(), elem.element_id),
-                    basedir_clone.clone(),
-                )
-            })
-            .collect::<Vec<_>>()
-            .await;*/
 
         // equivalent code but it actually compiles
         let mut subelems = vec![];

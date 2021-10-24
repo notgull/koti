@@ -292,3 +292,16 @@ pub async fn video_length(path: &Path) -> crate::Result<f32> {
 
     Ok(total)
 }
+
+#[inline]
+pub fn strip_html_tags(input: &str) -> Cow<'_, str> {
+    static HTML_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"<.*?>").expect("Regex failed to compile"));
+
+    HTML_REGEX.replace_all(input, "")
+}
+
+#[test]
+fn test_strip() {
+    assert_eq!(&*strip_html_tags("<b>awesome!</b>"), "awesome!");
+}

@@ -251,7 +251,10 @@ impl ConvertedFrame {
 
         // tractor
         let tractor = mlt
-            .add_tractor(iter::once(playlist1).chain(playlist2), iter::empty())
+            .add_tractor(
+                iter::once(playlist1).chain(playlist2),
+                iter::once(volume_filter(20)),
+            )
             .to_string();
 
         Ok(tractor)
@@ -352,9 +355,17 @@ impl ConvertedFrame {
 
         // set up the tractor
         let tractor = mlt
-            .add_tractor(ArrayIter::new([img1, img2]).chain(audio), iter::empty())
+            .add_tractor(
+                ArrayIter::new([img1, img2]).chain(audio),
+                iter::once(volume_filter(20)),
+            )
             .to_string();
 
         Ok(tractor)
     }
+}
+
+#[inline]
+pub fn volume_filter(level: u32) -> Filter {
+    Filter::new("volume").property("max_gain", format!("{}dB", level))
 }

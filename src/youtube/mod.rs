@@ -44,10 +44,19 @@ pub async fn upload_video(
     } = config;
 
     // sanitize the title
-    let video_title: String = video_title.chars().filter(|c| c.is_ascii()).collect();
+    let mut video_title: String = video_title.chars().filter(|c| c.is_ascii()).collect();
     log::info!("Video title: {}", &video_title);
     if video_title.is_empty() {
         return Err(crate::Error::StaticMsg("Video title was empty!"));
+    }
+
+    // titles have a character limit of 70 characters
+    while video_title.len() > 70 {
+        video_title = video_title
+            .split(' ')
+            .skip(1)
+            .map(|word| format!("{} ", word))
+            .collect();
     }
 
     // create the oauth authorization

@@ -24,7 +24,7 @@ pub mod mlt;
 pub mod music;
 mod process;
 mod reddit_text_source;
-mod scp;
+//mod scp;
 pub mod text2image;
 mod thumbnail;
 pub mod util;
@@ -76,9 +76,9 @@ const FRAME_SOURCES: &[fn(
     Arc<Context>,
 ) -> Pin<Box<dyn Future<Output = crate::Result> + Send + 'static>>] = &[
     reddit_text_source!("AskReddit", 500, 200, 100, "day"),
-    reddit_text_source!("TalesFromTechSupport", 500, 100, 100, "week"),
-    reddit_text_source!("StoresAboutKevin", 250, 50, 50, "week"),
-    reddit_text_source!("NoSleep", 750, 200, 100, "week"),
+    //    reddit_text_source!("TalesFromTechSupport", 500, 100, 100, "week"),
+    //    reddit_text_source!("StoresAboutKevin", 250, 50, 50, "week"),
+    //    reddit_text_source!("NoSleep", 750, 200, 100, "week"),
 ];
 
 #[inline]

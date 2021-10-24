@@ -15,6 +15,7 @@
  * along with KOTI.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+use crate::util::strip_html_tags;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -34,7 +35,8 @@ pub fn filter_text(s: &str) -> crate::Result {
 
 #[inline]
 pub fn filter_pass(s: String) -> crate::Result<String> {
-    filter_text(&s).map(|()| s)
+    let f = filter_text(&s).map(|()| s)?;
+    Ok(strip_html_tags(&f).into_owned())
 }
 
 #[test]
